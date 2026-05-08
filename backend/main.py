@@ -12,12 +12,17 @@ from pydantic import BaseModel
 from db import upsert_lead, get_all_leads, get_existing_emails
 from places import search_places
 from scraper import extract_email_sync
+from config import FRONTEND_URL
 
 app = FastAPI(title="Scala Leads Scraper")
 
+_origins = ["http://localhost:5173", "http://localhost:3000", "http://localhost:5174"]
+if FRONTEND_URL:
+    _origins.append(FRONTEND_URL)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:5174"],
+    allow_origins=_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

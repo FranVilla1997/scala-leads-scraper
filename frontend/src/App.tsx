@@ -7,7 +7,7 @@ import LeadsTable from './components/LeadsTable'
 import LeadsDB from './components/LeadsDB'
 import type { Lead, SSEEvent } from './types'
 
-const API = 'http://localhost:9001'
+const API = import.meta.env.VITE_API_URL ?? 'http://localhost:9001'
 
 type Tab = 'scraper' | 'database'
 type SearchState = 'idle' | 'searching' | 'done'
