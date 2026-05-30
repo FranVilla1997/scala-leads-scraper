@@ -21,10 +21,9 @@ export default function LeadsTable({ leads }: Props) {
 
   const exportCSV = () => {
     const fields: (keyof Lead)[] = ['name', 'address', 'phone', 'website', 'email', 'rating', 'reviews_count', 'category', 'search_query', 'search_zone']
+    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
     const header = fields.join(',')
-    const rows = leads.map(l =>
-      fields.map(f => String(l[f] ?? '').replace(/,/g, ';').replace(/\n/g, ' ')).join(',')
-    )
+    const rows = leads.map(l => fields.map(f => esc(l[f])).join(','))
     const blob = new Blob([header + '\n' + rows.join('\n')], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')

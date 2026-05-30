@@ -1,6 +1,7 @@
 import math
+import time
 import httpx
-from config import GOOGLE_PLACES_API_KEY
+from config import GOOGLE_PLACES_API_KEY, PLACES_RATE_RPS
 
 BASE = "https://places.googleapis.com/v1"
 
@@ -54,6 +55,45 @@ def _grid_points(center_lat: float, center_lng: float, radius_m: float, n: int) 
 
 # ── Places search ─────────────────────────────────────────────────────────────
 
+_last_call_ts = 0.0
+_min_gap = 1.0 / max(PLACES_RATE_RPS, 0.1)
+
+
+def _rate_limit() -> None:
+    global _last_call_ts
+    now = time.monotonic()
+    wait = _min_gap - (now - _last_call_ts)
+    if wait > 0:
+        time.sleep(wait)
+    _last_call_ts = time.monotonic()
+
+
+def _post_with_retry(client: httpx.Client, payload: dict, max_retries: int = 3) -> dict:
+    backoff = 1.0
+    last_err: Exception | None = None
+    for attempt in range(max_retries):
+        _rate_limit()
+        try:
+            resp = client.post(
+                f"{BASE}/places:searchText",
+                headers={
+                    "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
+                    "X-Goog-FieldMask": FIELD_MASK + ",nextPageToken",
+                },
+                json=payload,
+            )
+            if resp.status_code == 429 or resp.status_code >= 500:
+                raise httpx.HTTPStatusError("retryable", request=resp.request, response=resp)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(backoff)
+                backoff *= 2
+    raise last_err or RuntimeError("places request failed")
+
+
 def _text_search(query: str, location_bias: dict | None = None) -> list[dict]:
     """Single Places API text search (up to 60 results via pagination)."""
     results: list[dict] = []
@@ -71,16 +111,11 @@ def _text_search(query: str, location_bias: dict | None = None) -> list[dict]:
             if page_token:
                 payload["pageToken"] = page_token
 
-            resp = client.post(
-                f"{BASE}/places:searchText",
-                headers={
-                    "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
-                    "X-Goog-FieldMask": FIELD_MASK + ",nextPageToken",
-                },
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            try:
+                data = _post_with_retry(client, payload)
+            except Exception as e:
+                print(f"[places] search failed: {e}")
+                break
 
             for place in data.get("places", []):
                 results.append(_normalize(place))
