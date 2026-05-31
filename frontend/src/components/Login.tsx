@@ -21,9 +21,10 @@ export default function Login() {
   return (
     <div className="scala-bg min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-scala-text-primary">Scala Leads</h1>
-          <p className="text-sm text-scala-text-muted mt-2">Iniciá sesión para continuar</p>
+        <div className="flex flex-col items-center mb-8">
+          <img src="/logo/scala-logo.svg" alt="Scala" className="h-12 w-auto mb-5" />
+          <h1 className="text-2xl font-bold text-scala-text-primary">Leads Scraper</h1>
+          <p className="text-sm text-scala-text-muted mt-1.5">Iniciá sesión para continuar</p>
         </div>
 
         <form onSubmit={handleSubmit} className="rounded-2xl border border-white/[0.07] bg-scala-surface1 p-8 space-y-5">

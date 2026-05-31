@@ -15,9 +15,13 @@ export default function SellerDashboard() {
   const [textFilter, setTextFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all')
   const [zoneFilter, setZoneFilter] = useState<string | 'all'>('all')
+  const [categoryFilter, setCategoryFilter] = useState<string | 'all'>('all')
   const [savingId, setSavingId] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
+
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -55,17 +59,38 @@ export default function SellerDashboard() {
     return by
   }, [leads])
 
+  const categoryOptions = useMemo(() => {
+    const m = new Map<string, number>()
+    leads.forEach(l => {
+      if (!l.category) return
+      l.category.split(',').map(c => c.trim()).filter(Boolean).forEach(cat => {
+        m.set(cat, (m.get(cat) || 0) + 1)
+      })
+    })
+    return Array.from(m).sort((a, b) => b[1] - a[1])
+  }, [leads])
+
   const filtered = useMemo(() => {
     return leads.filter(l => {
       if (statusFilter !== 'all' && l.status !== statusFilter) return false
       if (zoneFilter !== 'all' && l.search_zone !== zoneFilter) return false
+      if (categoryFilter !== 'all') {
+        const cats = (l.category || '').split(',').map(c => c.trim())
+        if (!cats.includes(categoryFilter)) return false
+      }
       if (textFilter) {
         const q = textFilter.toLowerCase()
         if (![l.name, l.address, l.email, l.phone].some(v => v?.toLowerCase().includes(q))) return false
       }
       return true
     })
-  }, [leads, statusFilter, zoneFilter, textFilter])
+  }, [leads, statusFilter, zoneFilter, categoryFilter, textFilter])
+
+  useEffect(() => { setPage(1) }, [statusFilter, zoneFilter, categoryFilter, textFilter, pageSize])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const paginated = useMemo(() => filtered.slice((safePage - 1) * pageSize, safePage * pageSize), [filtered, safePage, pageSize])
 
   const exportCSV = () => {
     const fields: (keyof Lead)[] = ['name','address','phone','website','email','status','search_zone','notes']
@@ -144,6 +169,17 @@ export default function SellerDashboard() {
           {me.zones.map(z => <option key={z} value={z}>{z}</option>)}
         </select>
 
+        <select
+          value={categoryFilter}
+          onChange={e => setCategoryFilter(e.target.value)}
+          className="px-3 py-2 rounded-lg bg-scala-surface2 border border-white/[0.07] text-xs text-scala-text-primary cursor-pointer focus:outline-none focus:border-scala-blue/50 max-w-[200px]"
+        >
+          <option value="all">Todos los tipos</option>
+          {categoryOptions.map(([cat, count]) => (
+            <option key={cat} value={cat}>{cat.replace(/_/g, ' ')} ({count})</option>
+          ))}
+        </select>
+
         <div className="flex gap-2 ml-auto">
           {statusFilter !== 'all' && (
             <button onClick={() => setStatusFilter('all')} className="flex items-center gap-1 px-3 py-2 rounded-lg border border-white/[0.07] bg-scala-surface2 text-xs text-scala-text-muted hover:text-red-400 transition-colors">
@@ -184,7 +220,7 @@ export default function SellerDashboard() {
                   <Database size={28} className="mx-auto mb-3 text-scala-text-subtle opacity-30" />
                   <p className="text-scala-text-muted text-sm">Sin leads para los filtros aplicados</p>
                 </td></tr>
-              ) : filtered.map(lead => {
+              ) : paginated.map(lead => {
                 const isOpen = expanded === lead.place_id
                 return (
                   <Fragment key={lead.place_id}>
@@ -260,6 +296,33 @@ export default function SellerDashboard() {
             </tbody>
           </table>
         </div>
+
+        {/* Paginador */}
+        {filtered.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-t border-white/[0.07] bg-scala-surface1">
+            <div className="flex items-center gap-2 text-xs text-scala-text-muted">
+              <span>Mostrando {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} de {filtered.length}</span>
+              <span className="text-scala-text-subtle">·</span>
+              <span>Por página:</span>
+              <select
+                value={pageSize}
+                onChange={e => setPageSize(Number(e.target.value))}
+                className="bg-scala-surface2 border border-white/[0.07] rounded px-2 py-1 text-xs text-scala-text-primary focus:outline-none focus:border-scala-blue/50"
+              >
+                {[25, 50, 100, 200].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setPage(1)} disabled={safePage === 1} className="px-2 py-1 rounded text-xs text-scala-text-muted hover:text-scala-text-primary disabled:opacity-30 disabled:cursor-not-allowed">« Primera</button>
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={safePage === 1} className="px-2.5 py-1 rounded text-xs text-scala-text-muted hover:text-scala-text-primary disabled:opacity-30 disabled:cursor-not-allowed">‹ Anterior</button>
+              <span className="px-3 py-1 rounded bg-scala-surface2 text-xs text-scala-text-primary font-medium">
+                {safePage} <span className="text-scala-text-subtle">/ {totalPages}</span>
+              </span>
+              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={safePage === totalPages} className="px-2.5 py-1 rounded text-xs text-scala-text-muted hover:text-scala-text-primary disabled:opacity-30 disabled:cursor-not-allowed">Siguiente ›</button>
+              <button onClick={() => setPage(totalPages)} disabled={safePage === totalPages} className="px-2 py-1 rounded text-xs text-scala-text-muted hover:text-scala-text-primary disabled:opacity-30 disabled:cursor-not-allowed">Última »</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

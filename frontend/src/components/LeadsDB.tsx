@@ -97,7 +97,11 @@ export default function LeadsDB() {
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([])
   const [selectedStatuses, setSelectedStatuses] = useState<LeadStatus[]>([])
   const [selectedSellers, setSelectedSellers] = useState<string[]>([])
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([])
   const [emailFilter, setEmailFilter] = useState<'all' | 'with' | 'without'>('all')
+
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -138,6 +142,18 @@ export default function LeadsDB() {
       .sort((a, b) => b.count - a.count)
   ), [leads])
 
+  // Categorías de Google Places (campo `category`). Cada lead puede tener N tipos separados por ", ".
+  const categoryOptions = useMemo(() => {
+    const m = new Map<string, number>()
+    leads.forEach(l => {
+      if (!l.category) return
+      l.category.split(',').map(c => c.trim()).filter(Boolean).forEach(cat => {
+        m.set(cat, (m.get(cat) || 0) + 1)
+      })
+    })
+    return Array.from(m).map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count)
+  }, [leads])
+
   const sellerOptions = useMemo(() => (
     sellers.filter(s => s.role === 'vendedor').map(s => ({
       value: s.id,
@@ -148,10 +164,10 @@ export default function LeadsDB() {
 
   const toggle = <T,>(setter: React.Dispatch<React.SetStateAction<T[]>>) => (v: T) => setter(p => p.includes(v) ? p.filter(x => x !== v) : [...p, v])
 
-  const hasFilters = textFilter || selectedZones.length || selectedKeywords.length || selectedStatuses.length || selectedSellers.length || emailFilter !== 'all'
+  const hasFilters = textFilter || selectedZones.length || selectedKeywords.length || selectedStatuses.length || selectedSellers.length || selectedCategories.length || emailFilter !== 'all'
   const clearAll = () => {
     setTextFilter(''); setSelectedZones([]); setSelectedKeywords([])
-    setSelectedStatuses([]); setSelectedSellers([]); setEmailFilter('all')
+    setSelectedStatuses([]); setSelectedSellers([]); setSelectedCategories([]); setEmailFilter('all')
   }
 
   const filtered = useMemo(() => leads.filter(l => {
@@ -162,6 +178,10 @@ export default function LeadsDB() {
     if (selectedZones.length && !selectedZones.includes(l.search_zone)) return false
     if (selectedKeywords.length && !selectedKeywords.includes(l.search_query)) return false
     if (selectedStatuses.length && !selectedStatuses.includes(l.status)) return false
+    if (selectedCategories.length) {
+      const leadCats = (l.category || '').split(',').map(c => c.trim()).filter(Boolean)
+      if (!leadCats.some(c => selectedCategories.includes(c))) return false
+    }
     if (selectedSellers.length) {
       const owners = (zoneToSellers.get(l.search_zone) ?? []).map(s => s.id)
       if (!owners.some(id => selectedSellers.includes(id))) return false
@@ -169,7 +189,14 @@ export default function LeadsDB() {
     if (emailFilter === 'with' && !l.email) return false
     if (emailFilter === 'without' && l.email) return false
     return true
-  }), [leads, textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedSellers, emailFilter, zoneToSellers])
+  }), [leads, textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedCategories, selectedSellers, emailFilter, zoneToSellers])
+
+  // Reset page cuando cambian filtros
+  useEffect(() => { setPage(1) }, [textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedCategories, selectedSellers, emailFilter, pageSize])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const paginated = useMemo(() => filtered.slice((safePage - 1) * pageSize, safePage * pageSize), [filtered, safePage, pageSize])
 
   const updateStatus = async (lead: Lead, status: LeadStatus) => {
     setSavingId(lead.place_id)
@@ -232,6 +259,7 @@ export default function LeadsDB() {
 
         <MultiSelect label="Zona" options={zoneOptions} selected={selectedZones} onToggle={toggle(setSelectedZones)} />
         <MultiSelect label="Keyword" options={keywordOptions} selected={selectedKeywords} onToggle={toggle(setSelectedKeywords)} />
+        <MultiSelect label="Tipo de negocio" options={categoryOptions} selected={selectedCategories} onToggle={toggle(setSelectedCategories)} />
         <MultiSelect
           label="Estado"
           options={STATUS_ORDER.map(s => ({ value: s, count: leads.filter(l => l.status === s).length }))}
@@ -276,7 +304,7 @@ export default function LeadsDB() {
       </div>
 
       {/* Active filter chips */}
-      {(selectedZones.length || selectedKeywords.length || selectedStatuses.length || selectedSellers.length) > 0 && (
+      {(selectedZones.length || selectedKeywords.length || selectedStatuses.length || selectedSellers.length || selectedCategories.length) > 0 && (
         <div className="flex flex-wrap gap-1.5 px-1">
           {selectedZones.map(z => (
             <span key={z} className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-scala-blue/15 border border-scala-blue/30 text-scala-blue-light">
@@ -286,6 +314,11 @@ export default function LeadsDB() {
           {selectedKeywords.map(k => (
             <span key={k} className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-scala-green/10 border border-scala-green/30 text-scala-green">
               {k}<button onClick={() => toggle(setSelectedKeywords)(k)} className="hover:text-white"><X size={10} /></button>
+            </span>
+          ))}
+          {selectedCategories.map(c => (
+            <span key={c} className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-orange-500/10 border border-orange-500/30 text-orange-200">
+              {c.replace(/_/g, ' ')}<button onClick={() => toggle(setSelectedCategories)(c)} className="hover:text-white"><X size={10} /></button>
             </span>
           ))}
           {selectedStatuses.map(s => (
@@ -332,7 +365,7 @@ export default function LeadsDB() {
                     </p>
                   </td>
                 </tr>
-              ) : filtered.map((lead, i) => {
+              ) : paginated.map((lead, i) => {
                 const owners = zoneToSellers.get(lead.search_zone) ?? []
                 return (
                   <tr key={lead.place_id || i} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
@@ -377,6 +410,49 @@ export default function LeadsDB() {
             </tbody>
           </table>
         </div>
+
+        {/* Paginador */}
+        {filtered.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-t border-white/[0.07] bg-scala-surface1">
+            <div className="flex items-center gap-2 text-xs text-scala-text-muted">
+              <span>Mostrando {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} de {filtered.length}</span>
+              <span className="text-scala-text-subtle">·</span>
+              <span>Por página:</span>
+              <select
+                value={pageSize}
+                onChange={e => setPageSize(Number(e.target.value))}
+                className="bg-scala-surface2 border border-white/[0.07] rounded px-2 py-1 text-xs text-scala-text-primary focus:outline-none focus:border-scala-blue/50"
+              >
+                {[25, 50, 100, 200].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPage(1)}
+                disabled={safePage === 1}
+                className="px-2 py-1 rounded text-xs text-scala-text-muted hover:text-scala-text-primary disabled:opacity-30 disabled:cursor-not-allowed"
+              >« Primera</button>
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={safePage === 1}
+                className="px-2.5 py-1 rounded text-xs text-scala-text-muted hover:text-scala-text-primary disabled:opacity-30 disabled:cursor-not-allowed"
+              >‹ Anterior</button>
+              <span className="px-3 py-1 rounded bg-scala-surface2 text-xs text-scala-text-primary font-medium">
+                {safePage} <span className="text-scala-text-subtle">/ {totalPages}</span>
+              </span>
+              <button
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={safePage === totalPages}
+                className="px-2.5 py-1 rounded text-xs text-scala-text-muted hover:text-scala-text-primary disabled:opacity-30 disabled:cursor-not-allowed"
+              >Siguiente ›</button>
+              <button
+                onClick={() => setPage(totalPages)}
+                disabled={safePage === totalPages}
+                className="px-2 py-1 rounded text-xs text-scala-text-muted hover:text-scala-text-primary disabled:opacity-30 disabled:cursor-not-allowed"
+              >Última »</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
