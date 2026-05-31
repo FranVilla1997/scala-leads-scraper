@@ -14,9 +14,9 @@ from pydantic import BaseModel
 from auth import CurrentUser, require_admin, require_user
 from config import FRONTEND_URL, SCRAPER_CONCURRENCY
 from db import (
-    get_all_leads, get_all_zone_assignments, get_existing_emails,
+    create_seller, get_all_leads, get_all_zone_assignments, get_existing_emails,
     get_seller_zones, list_distinct_zones, list_sellers,
-    set_seller_zones, update_lead_status, upsert_lead,
+    set_seller_active, set_seller_zones, update_lead_status, upsert_lead,
 )
 from places import search_places
 from scraper import EmailScraper
@@ -25,11 +25,12 @@ app = FastAPI(title="Scala Leads Scraper")
 
 _origins = ["http://localhost:5173", "http://localhost:3000", "http://localhost:5174"]
 if FRONTEND_URL:
-    _origins.append(FRONTEND_URL)
+    _origins.extend([u.strip() for u in FRONTEND_URL.split(",") if u.strip()])
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -65,6 +66,16 @@ class StatusUpdate(BaseModel):
 
 class SellerZonesPayload(BaseModel):
     zones: list[str]
+
+
+class CreateSellerPayload(BaseModel):
+    email: str
+    password: str
+    full_name: str | None = None
+
+
+class ActivePayload(BaseModel):
+    active: bool
 
 
 # ── Search job ───────────────────────────────────────────────────────────────
@@ -292,10 +303,27 @@ async def get_sellers(_: CurrentUser = Depends(require_admin)):
     return sellers
 
 
+@app.post("/api/admin/sellers")
+async def post_seller(body: CreateSellerPayload, _: CurrentUser = Depends(require_admin)):
+    email = body.email.strip().lower()
+    if not email or len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Email y password (mín 6 chars) requeridos")
+    try:
+        return create_seller(email=email, password=body.password, full_name=body.full_name)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"No se pudo crear: {e}")
+
+
 @app.put("/api/admin/sellers/{user_id}/zones")
 async def put_seller_zones(user_id: str, body: SellerZonesPayload, _: CurrentUser = Depends(require_admin)):
     set_seller_zones(user_id, [z.strip() for z in body.zones if z.strip()])
     return {"ok": True, "zones": get_seller_zones(user_id)}
+
+
+@app.patch("/api/admin/sellers/{user_id}/active")
+async def patch_seller_active(user_id: str, body: ActivePayload, _: CurrentUser = Depends(require_admin)):
+    set_seller_active(user_id, body.active)
+    return {"ok": True}
 
 
 @app.get("/api/admin/zones")

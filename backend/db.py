@@ -79,6 +79,37 @@ def get_user_profile(user_id: str) -> dict | None:
         return None
 
 
+def create_seller(email: str, password: str, full_name: str | None = None) -> dict:
+    """Crea usuario en auth.users vía Supabase Admin API.
+    El trigger on_auth_user_created arma el users_profile con rol vendedor."""
+    client = get_client()
+    res = client.auth.admin.create_user({
+        "email": email,
+        "password": password,
+        "email_confirm": True,
+        "user_metadata": {"full_name": full_name or email},
+    })
+    user = getattr(res, "user", None) or res
+    user_id = getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else None)
+    if not user_id:
+        raise RuntimeError("Supabase no devolvió user.id")
+
+    # Backfill por si el trigger no se disparó (defensivo)
+    client.table("users_profile").upsert({
+        "id": user_id, "email": email,
+        "full_name": full_name or email, "role": "vendedor", "active": True,
+    }, on_conflict="id").execute()
+
+    return {"id": user_id, "email": email, "full_name": full_name or email, "role": "vendedor", "active": True, "zones": []}
+
+
+def set_seller_active(user_id: str, active: bool) -> None:
+    try:
+        get_client().table("users_profile").update({"active": active}).eq("id", user_id).execute()
+    except Exception as e:
+        print(f"[db] set_seller_active error: {e}")
+
+
 def list_sellers() -> list[dict]:
     try:
         res = (

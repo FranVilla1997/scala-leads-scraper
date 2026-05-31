@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Users, ShieldCheck, MapPin, Save, Loader2, Plus, X, Mail, RefreshCw } from 'lucide-react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { Users, ShieldCheck, MapPin, Save, Loader2, Plus, X, Mail, RefreshCw, UserPlus, AlertCircle, Power } from 'lucide-react'
 import { apiFetch, apiJson } from '../lib/api'
 import type { Seller } from '../types'
 
@@ -11,6 +11,13 @@ export default function SellersAdmin() {
   const [draftZones, setDraftZones] = useState<string[]>([])
   const [newZoneInput, setNewZoneInput] = useState('')
   const [saving, setSaving] = useState(false)
+
+  const [showCreate, setShowCreate] = useState(false)
+  const [newEmail, setNewEmail] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newFullName, setNewFullName] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -57,6 +64,34 @@ export default function SellersAdmin() {
     } finally { setSaving(false) }
   }
 
+  const submitCreate = async (e: FormEvent) => {
+    e.preventDefault()
+    setCreateError(null)
+    setCreating(true)
+    try {
+      const res = await apiFetch('/api/admin/sellers', {
+        method: 'POST',
+        body: JSON.stringify({ email: newEmail, password: newPassword, full_name: newFullName || null }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { detail?: string }
+        setCreateError(err.detail || `${res.status} ${res.statusText}`)
+        return
+      }
+      setNewEmail(''); setNewPassword(''); setNewFullName('')
+      setShowCreate(false)
+      await load()
+    } finally { setCreating(false) }
+  }
+
+  const toggleActive = async (s: Seller) => {
+    const res = await apiFetch(`/api/admin/sellers/${s.id}/active`, {
+      method: 'PATCH',
+      body: JSON.stringify({ active: !s.active }),
+    })
+    if (res.ok) setSellers(prev => prev.map(x => x.id === s.id ? { ...x, active: !s.active } : x))
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -64,18 +99,78 @@ export default function SellersAdmin() {
           <Users size={16} className="text-scala-text-muted" />
           <h2 className="text-sm font-medium text-scala-text-primary">Vendedores y zonas asignadas</h2>
         </div>
-        <button onClick={load} disabled={loading} className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-white/[0.07] bg-scala-surface2 text-xs text-scala-text-muted hover:text-scala-text-primary transition-colors disabled:opacity-40">
-          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-          Refrescar
-        </button>
+        <div className="flex gap-2">
+          <button onClick={load} disabled={loading} className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-white/[0.07] bg-scala-surface2 text-xs text-scala-text-muted hover:text-scala-text-primary transition-colors disabled:opacity-40">
+            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+            Refrescar
+          </button>
+          <button onClick={() => setShowCreate(s => !s)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-scala-blue hover:bg-scala-blue-light text-white text-xs font-medium transition-colors">
+            <UserPlus size={13} />
+            Nuevo vendedor
+          </button>
+        </div>
       </div>
 
-      <div className="rounded-xl border border-white/[0.07] bg-scala-surface1 p-4 text-xs text-scala-text-muted leading-relaxed">
-        <p>
-          Para crear un vendedor: ir a <span className="text-scala-text-primary font-medium">Supabase Dashboard → Authentication → Add user</span> (email + password).
-          El usuario se crea automáticamente con rol <span className="text-scala-text-primary">vendedor</span>. Luego, asignale zonas acá.
-        </p>
-      </div>
+      {showCreate && (
+        <form onSubmit={submitCreate} className="rounded-xl border border-white/[0.07] bg-scala-surface1 p-5 space-y-3">
+          <h3 className="text-sm font-medium text-scala-text-primary">Crear vendedor</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-scala-text-muted mb-1 block">Nombre</label>
+              <input
+                value={newFullName}
+                onChange={e => setNewFullName(e.target.value)}
+                placeholder="Juan Pérez"
+                disabled={creating}
+                className="w-full px-3 py-2 rounded-lg bg-scala-surface2 border border-white/[0.07] text-xs text-scala-text-primary placeholder:text-scala-text-subtle focus:outline-none focus:border-scala-blue/50 disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-scala-text-muted mb-1 block">Email</label>
+              <input
+                type="email"
+                required
+                value={newEmail}
+                onChange={e => setNewEmail(e.target.value)}
+                placeholder="juan@scala.com"
+                disabled={creating}
+                className="w-full px-3 py-2 rounded-lg bg-scala-surface2 border border-white/[0.07] text-xs text-scala-text-primary placeholder:text-scala-text-subtle focus:outline-none focus:border-scala-blue/50 disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-scala-text-muted mb-1 block">Contraseña (mín 6)</label>
+              <input
+                type="text"
+                required
+                minLength={6}
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="contraseña inicial"
+                disabled={creating}
+                className="w-full px-3 py-2 rounded-lg bg-scala-surface2 border border-white/[0.07] text-xs text-scala-text-primary placeholder:text-scala-text-subtle focus:outline-none focus:border-scala-blue/50 disabled:opacity-50"
+              />
+            </div>
+          </div>
+
+          {createError && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-300">
+              <AlertCircle size={14} className="shrink-0 mt-0.5" />
+              <span>{createError}</span>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button type="submit" disabled={creating || !newEmail || newPassword.length < 6} className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-scala-blue hover:bg-scala-blue-light text-white text-xs font-medium disabled:opacity-40 transition-colors">
+              {creating ? <Loader2 size={13} className="animate-spin" /> : <UserPlus size={13} />}
+              Crear
+            </button>
+            <button type="button" onClick={() => { setShowCreate(false); setCreateError(null) }} className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-white/10 text-xs text-scala-text-muted hover:text-scala-text-primary">
+              <X size={13} /> Cancelar
+            </button>
+            <span className="text-[10px] text-scala-text-subtle self-center ml-2">Pasale el email + contraseña al vendedor para que entre.</span>
+          </div>
+        </form>
+      )}
 
       <div className="space-y-2">
         {sellers.length === 0 && !loading && (
@@ -85,7 +180,7 @@ export default function SellersAdmin() {
         {sellers.map(s => {
           const isEditing = editing === s.id
           return (
-            <div key={s.id} className="rounded-xl border border-white/[0.07] bg-scala-surface1 p-4">
+            <div key={s.id} className={`rounded-xl border bg-scala-surface1 p-4 ${s.active ? 'border-white/[0.07]' : 'border-white/[0.04] opacity-60'}`}>
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div className="flex items-center gap-3 min-w-[260px]">
                   {s.role === 'admin'
@@ -98,6 +193,22 @@ export default function SellersAdmin() {
                   <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${
                     s.role === 'admin' ? 'bg-scala-blue/20 text-scala-blue-light' : 'bg-white/5 text-scala-text-muted'
                   }`}>{s.role}</span>
+                  {!s.active && (
+                    <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-red-500/15 text-red-300 border border-red-500/30">Inactivo</span>
+                  )}
+                  {s.role === 'vendedor' && (
+                    <button
+                      onClick={() => toggleActive(s)}
+                      title={s.active ? 'Desactivar' : 'Activar'}
+                      className={`ml-1 p-1 rounded-md border transition-colors ${
+                        s.active
+                          ? 'border-white/10 text-scala-text-muted hover:text-red-400 hover:border-red-400/30'
+                          : 'border-scala-green/30 text-scala-green hover:bg-scala-green/10'
+                      }`}
+                    >
+                      <Power size={12} />
+                    </button>
+                  )}
                 </div>
 
                 {s.role === 'vendedor' && (

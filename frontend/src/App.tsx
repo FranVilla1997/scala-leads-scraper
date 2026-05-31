@@ -38,7 +38,7 @@ function AdminApp() {
       if (!res.ok) throw new Error('Error al iniciar la búsqueda')
       const { job_id } = await res.json() as { job_id: string }
 
-      const token = await getAccessToken()
+      const token = getAccessToken()
       const url = `${API}/api/search/${job_id}/stream${token ? `?access_token=${encodeURIComponent(token)}` : ''}`
       const es = new EventSource(url)
       esRef.current = es
