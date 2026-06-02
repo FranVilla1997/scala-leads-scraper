@@ -20,11 +20,29 @@ def upsert_lead(lead: dict) -> None:
         print(f"[db] upsert failed for {lead.get('name')}: {e}")
 
 
+_PAGE = 1000  # PostgREST default max_rows
+
+
+def _paginate(query_builder_fn) -> list[dict]:
+    """Itera con range() hasta agotar resultados. `query_builder_fn(start, end)`
+    devuelve un query Supabase ya configurado."""
+    out: list[dict] = []
+    start = 0
+    while True:
+        chunk = query_builder_fn(start, start + _PAGE - 1).execute().data or []
+        out.extend(chunk)
+        if len(chunk) < _PAGE:
+            break
+        start += _PAGE
+    return out
+
+
 def get_existing_emails() -> dict[str, str | None]:
     """Returns {place_id: email} for all leads already in DB."""
     try:
-        result = get_client().table("scraping_leads").select("place_id, email").execute()
-        return {row["place_id"]: row["email"] for row in (result.data or [])}
+        rows = _paginate(lambda a, b: get_client().table("scraping_leads")
+                         .select("place_id, email").range(a, b))
+        return {row["place_id"]: row["email"] for row in rows}
     except Exception as e:
         print(f"[db] get_existing_emails error: {e}")
         return {}
@@ -32,12 +50,14 @@ def get_existing_emails() -> dict[str, str | None]:
 
 def get_all_leads(zones: list[str] | None = None) -> list[dict]:
     try:
-        q = get_client().table("scraping_leads").select("*").order("scraped_at", desc=True)
-        if zones is not None:
-            if not zones:
-                return []
-            q = q.in_("search_zone", zones)
-        return q.execute().data or []
+        if zones is not None and not zones:
+            return []
+        def build(a: int, b: int):
+            q = get_client().table("scraping_leads").select("*").order("scraped_at", desc=True)
+            if zones is not None:
+                q = q.in_("search_zone", zones)
+            return q.range(a, b)
+        return _paginate(build)
     except Exception as e:
         print(f"[db] get_all_leads error: {e}")
         return []
@@ -170,8 +190,9 @@ def set_seller_zones(user_id: str, zones: list[str]) -> None:
 def list_distinct_zones() -> list[str]:
     """All zones that appear in scraping_leads (for the admin to pick from)."""
     try:
-        res = get_client().table("scraping_leads").select("search_zone").execute()
-        return sorted({r["search_zone"] for r in (res.data or []) if r.get("search_zone")})
+        rows = _paginate(lambda a, b: get_client().table("scraping_leads")
+                         .select("search_zone").range(a, b))
+        return sorted({r["search_zone"] for r in rows if r.get("search_zone")})
     except Exception as e:
         print(f"[db] list_distinct_zones error: {e}")
         return []
