@@ -1,10 +1,11 @@
 import { useState, useRef } from 'react'
-import { Search, Database, Users, Loader2 } from 'lucide-react'
+import { Search, Database, Users, Loader2, BarChart3 } from 'lucide-react'
 import Header from './components/Header'
 import SearchPanel from './components/SearchPanel'
 import ProgressPanel from './components/ProgressPanel'
 import LeadsTable from './components/LeadsTable'
 import LeadsDB from './components/LeadsDB'
+import Dashboard from './components/Dashboard'
 import SellerDashboard from './components/SellerDashboard'
 import SellersAdmin from './components/SellersAdmin'
 import Login from './components/Login'
@@ -12,11 +13,11 @@ import { useAuth } from './lib/AuthContext'
 import { API, apiFetch, getAccessToken } from './lib/api'
 import type { Lead, SSEEvent } from './types'
 
-type AdminTab = 'scraper' | 'database' | 'sellers'
+type AdminTab = 'dashboard' | 'scraper' | 'database' | 'sellers'
 type SearchState = 'idle' | 'searching' | 'done'
 
 function AdminApp() {
-  const [tab, setTab] = useState<AdminTab>('scraper')
+  const [tab, setTab] = useState<AdminTab>('dashboard')
   const [searchState, setSearchState] = useState<SearchState>('idle')
   const [statusMessage, setStatusMessage] = useState('')
   const [leads, setLeads] = useState<Lead[]>([])
@@ -75,9 +76,10 @@ function AdminApp() {
   }
 
   const tabs: { id: AdminTab; label: string; icon: typeof Search }[] = [
-    { id: 'scraper',  label: 'Scraper',         icon: Search },
-    { id: 'database', label: 'Base de datos',   icon: Database },
-    { id: 'sellers',  label: 'Vendedores',      icon: Users },
+    { id: 'dashboard', label: 'Dashboard',      icon: BarChart3 },
+    { id: 'scraper',   label: 'Scraper',        icon: Search },
+    { id: 'database',  label: 'Base de datos',  icon: Database },
+    { id: 'sellers',   label: 'Vendedores',     icon: Users },
   ]
 
   return (
@@ -112,8 +114,9 @@ function AdminApp() {
         </>
       )}
 
-      {tab === 'database' && <LeadsDB />}
-      {tab === 'sellers'  && <SellersAdmin />}
+      {tab === 'dashboard' && <Dashboard />}
+      {tab === 'database'  && <LeadsDB />}
+      {tab === 'sellers'   && <SellersAdmin />}
     </>
   )
 }

@@ -332,6 +332,118 @@ async def get_zones(_: CurrentUser = Depends(require_admin)):
     return list_distinct_zones()
 
 
+@app.get("/api/admin/stats")
+async def get_stats(_: CurrentUser = Depends(require_admin)):
+    """Dashboard payload: KPIs + lead distribution + per-seller performance."""
+    from collections import Counter, defaultdict
+    from datetime import datetime, timedelta, timezone
+
+    leads = get_all_leads(zones=None)
+    sellers = list_sellers()
+    assignments = get_all_zone_assignments()
+
+    now = datetime.now(timezone.utc)
+    d7  = now - timedelta(days=7)
+    d30 = now - timedelta(days=30)
+
+    def _parse(s: str | None) -> datetime | None:
+        if not s: return None
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    total = len(leads)
+    with_email = sum(1 for l in leads if l.get("email"))
+    by_status = Counter(l.get("status") or "nuevo" for l in leads)
+    by_zone   = Counter(l.get("search_zone") for l in leads if l.get("search_zone"))
+    by_query  = Counter(l.get("search_query") for l in leads if l.get("search_query"))
+
+    by_category: Counter = Counter()
+    for l in leads:
+        for c in (l.get("category") or "").split(","):
+            c = c.strip()
+            if c: by_category[c] += 1
+
+    # Activity (created) last 30 days, by date
+    activity_30d: dict[str, int] = defaultdict(int)
+    for l in leads:
+        ts = _parse(l.get("scraped_at"))
+        if ts and ts >= d30:
+            activity_30d[ts.date().isoformat()] += 1
+
+    # Activity (updates) — counted by `updated_by`
+    updates_7d:  Counter = Counter()
+    updates_30d: Counter = Counter()
+    for l in leads:
+        upd_by = l.get("updated_by")
+        upd_at = _parse(l.get("updated_at"))
+        if not upd_by or not upd_at: continue
+        if upd_at >= d7:  updates_7d[upd_by] += 1
+        if upd_at >= d30: updates_30d[upd_by] += 1
+
+    # Zone → seller list (vendedores only)
+    zone_to_sellers: dict[str, list[str]] = defaultdict(list)
+    for s in sellers:
+        if s["role"] != "vendedor": continue
+        for z in assignments.get(s["id"], []):
+            zone_to_sellers[z].append(s["id"])
+
+    # Per-seller aggregation
+    per_seller: dict[str, dict] = {}
+    for s in sellers:
+        if s["role"] != "vendedor": continue
+        per_seller[s["id"]] = {
+            "id": s["id"],
+            "email": s["email"],
+            "full_name": s.get("full_name"),
+            "active": s.get("active", True),
+            "zones": assignments.get(s["id"], []),
+            "total_assigned": 0,
+            "by_status": {st: 0 for st in ("nuevo","contactado","interesado","cerrado_ganado","cerrado_perdido")},
+            "with_email": 0,
+            "updates_7d": updates_7d.get(s["id"], 0),
+            "updates_30d": updates_30d.get(s["id"], 0),
+        }
+
+    for l in leads:
+        owners = zone_to_sellers.get(l.get("search_zone") or "", [])
+        for sid in owners:
+            agg = per_seller.get(sid)
+            if not agg: continue
+            agg["total_assigned"] += 1
+            st = l.get("status") or "nuevo"
+            if st in agg["by_status"]:
+                agg["by_status"][st] += 1
+            if l.get("email"):
+                agg["with_email"] += 1
+
+    # Conversion % por vendedor (contactado o mejor / total)
+    for s in per_seller.values():
+        t = s["total_assigned"] or 1
+        contacted_plus = s["by_status"]["contactado"] + s["by_status"]["interesado"] + s["by_status"]["cerrado_ganado"] + s["by_status"]["cerrado_perdido"]
+        won = s["by_status"]["cerrado_ganado"]
+        s["contact_rate"] = round(contacted_plus / t * 100, 1)
+        s["win_rate"]     = round(won / t * 100, 1)
+
+    return {
+        "overview": {
+            "total": total,
+            "with_email": with_email,
+            "without_email": total - with_email,
+            "email_rate": round(with_email / total * 100, 1) if total else 0,
+            "by_status": dict(by_status),
+            "scraped_last_7d":  sum(1 for l in leads if (ts := _parse(l.get("scraped_at"))) and ts >= d7),
+            "scraped_last_30d": sum(1 for l in leads if (ts := _parse(l.get("scraped_at"))) and ts >= d30),
+        },
+        "top_zones":      [{"zone": z, "count": c} for z, c in by_zone.most_common(10)],
+        "top_categories": [{"category": k, "count": c} for k, c in by_category.most_common(10)],
+        "top_queries":    [{"query": q, "count": c} for q, c in by_query.most_common(10)],
+        "activity_30d":   [{"date": d, "count": activity_30d[d]} for d in sorted(activity_30d.keys())],
+        "sellers":        sorted(per_seller.values(), key=lambda x: x["by_status"]["cerrado_ganado"], reverse=True),
+    }
+
+
 # ── Run ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
