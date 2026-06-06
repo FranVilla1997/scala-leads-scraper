@@ -19,13 +19,49 @@ FIELD_MASK = ",".join([
 
 # ── Geocoding ────────────────────────────────────────────────────────────────
 
-def geocode_zone(zone: str) -> tuple[float, float, float] | None:
-    """Returns (lat, lng, radius_m) for the zone bounding box.
+_NOMINATIM_UA = "ScalaLeadsScraper/1.0 (contact: francovillayoma@gmail.com)"
+_geocode_cache: dict[str, tuple[float, float, float] | None] = {}
 
-    Uses Places API v1 (same key the rest del módulo usa). Antes esto pegaba a
-    la Geocoding API que es un servicio aparte — si el project no la tenía
-    habilitada, fallaba silenciosamente y la búsqueda caía al modo de 60.
-    """
+
+def _nominatim_geocode(zone: str) -> tuple[float, float, float] | None:
+    """OpenStreetMap Nominatim — gratis, sin API key. Devuelve (lat, lng, radius_m)."""
+    try:
+        resp = httpx.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "q": zone,
+                "format": "json",
+                "limit": 1,
+                "addressdetails": 0,
+            },
+            headers={"User-Agent": _NOMINATIM_UA, "Accept-Language": "es"},
+            timeout=10,
+        )
+        if resp.status_code >= 400:
+            print(f"[geocode] nominatim '{zone}' → HTTP {resp.status_code}")
+            return None
+        data = resp.json()
+        if not data:
+            return None
+        item = data[0]
+        lat = float(item["lat"])
+        lng = float(item["lon"])
+        bb = item.get("boundingbox")  # [south, north, west, east]
+        if bb and len(bb) == 4:
+            south, north, west, east = (float(x) for x in bb)
+            lat_span = (north - south) * 111_000
+            lng_span = (east - west) * 111_000 * math.cos(math.radians(lat))
+            radius = max(lat_span, lng_span) / 2
+        else:
+            radius = 8_000
+        return lat, lng, min(max(radius, 2_000), 50_000)
+    except Exception as e:
+        print(f"[geocode] nominatim '{zone}' exception: {e}")
+        return None
+
+
+def _places_geocode(zone: str) -> tuple[float, float, float] | None:
+    """Fallback: pedir la ubicación a Places API con hint de Argentina."""
     try:
         with httpx.Client(timeout=10) as client:
             resp = client.post(
@@ -34,35 +70,43 @@ def geocode_zone(zone: str) -> tuple[float, float, float] | None:
                     "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
                     "X-Goog-FieldMask": "places.location,places.viewport",
                 },
-                json={"textQuery": zone, "languageCode": "es", "maxResultCount": 1},
+                json={"textQuery": f"{zone}, Argentina", "languageCode": "es", "maxResultCount": 1},
             )
             if resp.status_code >= 400:
-                print(f"[places] geocode_zone '{zone}' → HTTP {resp.status_code}: {resp.text[:200]}")
                 return None
             places = resp.json().get("places", [])
             if not places:
-                print(f"[places] geocode_zone '{zone}' → sin resultados")
                 return None
             p = places[0]
             loc = p.get("location") or {}
-            lat = loc.get("latitude")
-            lng = loc.get("longitude")
+            lat, lng = loc.get("latitude"), loc.get("longitude")
             if lat is None or lng is None:
                 return None
-
             vp = p.get("viewport") or {}
-            low = vp.get("low") or {}
-            high = vp.get("high") or {}
+            low, high = vp.get("low") or {}, vp.get("high") or {}
             if low and high:
                 lat_span = (high.get("latitude", lat) - low.get("latitude", lat)) * 111_000
                 lng_span = (high.get("longitude", lng) - low.get("longitude", lng)) * 111_000 * math.cos(math.radians(lat))
                 radius = max(lat_span, lng_span) / 2
             else:
-                radius = 8_000  # default 8km si no hay viewport
+                radius = 8_000
             return lat, lng, min(max(radius, 2_000), 50_000)
-    except Exception as e:
-        print(f"[places] geocode_zone '{zone}' exception: {e}")
+    except Exception:
         return None
+
+
+def geocode_zone(zone: str) -> tuple[float, float, float] | None:
+    """Devuelve (lat, lng, radius_m) para la zona. Nominatim → Places fallback."""
+    if zone in _geocode_cache:
+        return _geocode_cache[zone]
+    geo = _nominatim_geocode(zone) or _places_geocode(zone)
+    if geo:
+        lat, lng, radius = geo
+        print(f"[geocode] '{zone}' → ({lat:.4f}, {lng:.4f}) radio={int(radius)}m")
+    else:
+        print(f"[geocode] '{zone}' → falló (nominatim + places)")
+    _geocode_cache[zone] = geo
+    return geo
 
 
 def _grid_points(center_lat: float, center_lng: float, radius_m: float, n: int) -> list[tuple[float, float]]:
