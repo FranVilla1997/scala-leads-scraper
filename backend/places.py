@@ -20,22 +20,49 @@ FIELD_MASK = ",".join([
 # ── Geocoding ────────────────────────────────────────────────────────────────
 
 def geocode_zone(zone: str) -> tuple[float, float, float] | None:
-    """Returns (lat, lng, radius_m) for the zone bounding box."""
-    resp = httpx.get(
-        "https://maps.googleapis.com/maps/api/geocode/json",
-        params={"address": zone, "key": GOOGLE_PLACES_API_KEY},
-        timeout=10,
-    )
-    results = resp.json().get("results", [])
-    if not results:
-        return None
+    """Returns (lat, lng, radius_m) for the zone bounding box.
 
-    loc = results[0]["geometry"]["location"]
-    vp = results[0]["geometry"]["viewport"]
-    lat_span = (vp["northeast"]["lat"] - vp["southwest"]["lat"]) * 111_000
-    lng_span = (vp["northeast"]["lng"] - vp["southwest"]["lng"]) * 111_000 * math.cos(math.radians(loc["lat"]))
-    radius = max(lat_span, lng_span) / 2
-    return loc["lat"], loc["lng"], min(radius, 50_000)
+    Uses Places API v1 (same key the rest del módulo usa). Antes esto pegaba a
+    la Geocoding API que es un servicio aparte — si el project no la tenía
+    habilitada, fallaba silenciosamente y la búsqueda caía al modo de 60.
+    """
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.post(
+                f"{BASE}/places:searchText",
+                headers={
+                    "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
+                    "X-Goog-FieldMask": "places.location,places.viewport",
+                },
+                json={"textQuery": zone, "languageCode": "es", "maxResultCount": 1},
+            )
+            if resp.status_code >= 400:
+                print(f"[places] geocode_zone '{zone}' → HTTP {resp.status_code}: {resp.text[:200]}")
+                return None
+            places = resp.json().get("places", [])
+            if not places:
+                print(f"[places] geocode_zone '{zone}' → sin resultados")
+                return None
+            p = places[0]
+            loc = p.get("location") or {}
+            lat = loc.get("latitude")
+            lng = loc.get("longitude")
+            if lat is None or lng is None:
+                return None
+
+            vp = p.get("viewport") or {}
+            low = vp.get("low") or {}
+            high = vp.get("high") or {}
+            if low and high:
+                lat_span = (high.get("latitude", lat) - low.get("latitude", lat)) * 111_000
+                lng_span = (high.get("longitude", lng) - low.get("longitude", lng)) * 111_000 * math.cos(math.radians(lat))
+                radius = max(lat_span, lng_span) / 2
+            else:
+                radius = 8_000  # default 8km si no hay viewport
+            return lat, lng, min(max(radius, 2_000), 50_000)
+    except Exception as e:
+        print(f"[places] geocode_zone '{zone}' exception: {e}")
+        return None
 
 
 def _grid_points(center_lat: float, center_lng: float, radius_m: float, n: int) -> list[tuple[float, float]]:
@@ -127,6 +154,10 @@ def _text_search(query: str, location_bias: dict | None = None) -> list[dict]:
     return results
 
 
+# Mapeo explícito UI → tamaño de grilla (matchea las labels del SearchPanel)
+_GRID_SIDE = {120: 2, 200: 3, 300: 4}
+
+
 def search_places(query: str, zone: str, max_results: int = 60) -> list[dict]:
     seen: dict[str, dict] = {}
 
@@ -135,21 +166,24 @@ def search_places(query: str, zone: str, max_results: int = 60) -> list[dict]:
         for p in places:
             if p["place_id"] not in seen:
                 seen[p["place_id"]] = p
+        print(f"[places] '{query}' en {zone}: {len(seen)} (modo simple)")
     else:
-        # Grid search: n×n cells covering the zone
         geo = geocode_zone(zone)
         if not geo:
-            # Fallback to standard search
+            print(f"[places] '{query}' en {zone}: fallback simple (geocode falló)")
             places = _text_search(f"{query} en {zone}")
             for p in places:
                 seen[p["place_id"]] = p
         else:
             center_lat, center_lng, radius_m = geo
-            cells_per_side = math.ceil(math.sqrt(max_results / 60))
-            cell_radius = radius_m / cells_per_side * 1.4  # slight overlap
-
+            cells_per_side = _GRID_SIDE.get(max_results) or max(2, math.ceil(math.sqrt(max_results / 60)))
+            cell_radius = radius_m / cells_per_side * 1.4  # overlap suave
             points = _grid_points(center_lat, center_lng, radius_m, cells_per_side)
-            for lat, lng in points:
+            print(f"[places] '{query}' en {zone}: grilla {cells_per_side}×{cells_per_side}, "
+                  f"centro=({center_lat:.4f},{center_lng:.4f}), radio={int(radius_m)}m, "
+                  f"cell_radius={int(cell_radius)}m")
+
+            for idx, (lat, lng) in enumerate(points):
                 if len(seen) >= max_results:
                     break
                 bias = {
@@ -158,10 +192,13 @@ def search_places(query: str, zone: str, max_results: int = 60) -> list[dict]:
                         "radius": cell_radius,
                     }
                 }
-                places = _text_search(query, location_bias=bias)
+                # Mantenemos el zone en la query — sin él, locationBias es solo "preferencia" y trae ruido
+                before = len(seen)
+                places = _text_search(f"{query} en {zone}", location_bias=bias)
                 for p in places:
                     if p["place_id"] not in seen:
                         seen[p["place_id"]] = p
+                print(f"[places]   cell {idx + 1}/{len(points)}: +{len(seen) - before} nuevos (total {len(seen)})")
 
     return list(seen.values())[:max_results]
 
