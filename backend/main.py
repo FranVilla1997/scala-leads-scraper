@@ -54,9 +54,27 @@ VALID_STATUSES = {"nuevo", "contactado", "interesado", "cerrado_ganado", "cerrad
 
 
 class SearchRequest(BaseModel):
-    query: str
+    # Soporta tanto `query` (single, legacy) como `queries` (multi).
+    query: str | None = None
+    queries: list[str] | None = None
     zones: list[str]
     max_results: int = 60
+
+    def normalized_queries(self) -> list[str]:
+        out: list[str] = []
+        if self.queries:
+            out.extend(self.queries)
+        if self.query:
+            out.append(self.query)
+        # dedupe preservando orden + strip
+        seen: set[str] = set()
+        result: list[str] = []
+        for q in out:
+            q = q.strip()
+            if q and q.lower() not in seen:
+                seen.add(q.lower())
+                result.append(q)
+        return result
 
 
 class StatusUpdate(BaseModel):
@@ -80,7 +98,7 @@ class ActivePayload(BaseModel):
 
 # ── Search job ───────────────────────────────────────────────────────────────
 
-async def run_search(job_id: str, query: str, zones: list[str], max_results: int = 60) -> None:
+async def run_search(job_id: str, queries: list[str], zones: list[str], max_results: int = 60) -> None:
     state = jobs[job_id]
     q = state.queue
     loop = asyncio.get_event_loop()
@@ -89,22 +107,29 @@ async def run_search(job_id: str, query: str, zones: list[str], max_results: int
     try:
         grid_note = " con grilla" if max_results > 60 else ""
         zones_label = ", ".join(zones)
-        await q.put({"type": "status", "message": f"Buscando '{query}' en {zones_label}{grid_note}..."})
+        queries_label = ", ".join(f"'{x}'" for x in queries)
+        await q.put({
+            "type": "status",
+            "message": f"Buscando {queries_label} en {zones_label}{grid_note}...",
+        })
 
         all_places: dict[str, dict] = {}
-        for zi, zone in enumerate(zones):
+        combos = [(qi, query, zi, zone) for qi, query in enumerate(queries) for zi, zone in enumerate(zones)]
+
+        for idx, (qi, query, zi, zone) in enumerate(combos):
             if state.cancel_event.is_set():
                 await q.put({"type": "status", "message": "Cancelado por el usuario"})
                 return
             await q.put({
                 "type": "status",
-                "message": f"Buscando en {zone} ({zi + 1}/{len(zones)})...",
+                "message": f"[{idx + 1}/{len(combos)}] '{query}' en {zone}...",
             })
             places = await loop.run_in_executor(None, search_places, query, zone, max_results)
             for p in places:
                 pid = p.get("place_id")
                 if pid and pid not in all_places:
                     p["search_zone"] = zone
+                    p["search_query"] = query  # tag con la query que lo encontró primero
                     all_places[pid] = p
 
         places_list = list(all_places.values())
@@ -114,7 +139,7 @@ async def run_search(job_id: str, query: str, zones: list[str], max_results: int
 
         await q.put({
             "type": "status",
-            "message": f"Encontrados {total} negocios únicos en {len(zones)} zona(s). Extrayendo emails...",
+            "message": f"Encontrados {total} negocios únicos ({len(queries)} keyword(s) × {len(zones)} zona(s)). Extrayendo emails...",
             "total": total,
         })
 
@@ -141,7 +166,7 @@ async def run_search(job_id: str, query: str, zones: list[str], max_results: int
                 "rating": place.get("rating"),
                 "reviews_count": place.get("user_ratings_total"),
                 "category": ", ".join(types[:2]),
-                "search_query": query,
+                "search_query": place.get("search_query", queries[0]),
                 "search_zone": place.get("search_zone", zones[0]),
                 "scraped_at": datetime.now(timezone.utc).isoformat(),
                 "email": None,
@@ -191,10 +216,15 @@ async def run_search(job_id: str, query: str, zones: list[str], max_results: int
 
 @app.post("/api/search")
 async def start_search(req: SearchRequest, _: CurrentUser = Depends(require_admin)):
+    queries = req.normalized_queries()
+    if not queries:
+        raise HTTPException(status_code=400, detail="Necesitás al menos una keyword")
+    if not req.zones:
+        raise HTTPException(status_code=400, detail="Necesitás al menos una zona")
     job_id = str(uuid.uuid4())
     state = JobState()
     jobs[job_id] = state
-    state.task = asyncio.create_task(run_search(job_id, req.query, req.zones, req.max_results))
+    state.task = asyncio.create_task(run_search(job_id, queries, req.zones, req.max_results))
     return {"job_id": job_id}
 
 
