@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Download, Mail, Phone, Globe, Star, Search,
-  RefreshCw, ExternalLink, Database, X, ChevronDown, Check, Loader2,
+  RefreshCw, ExternalLink, Database, X, ChevronDown, Check, Loader2, ArrowUpDown,
 } from 'lucide-react'
 import { apiFetch, apiJson } from '../lib/api'
-import type { Lead, LeadStatus, Seller } from '../types'
-import { STATUS_LABEL, STATUS_ORDER } from '../types'
+import type { Lead, LeadStatus, Seller, SortMode } from '../types'
+import { STATUS_LABEL, STATUS_ORDER, SORT_LABEL, sortLeads } from '../types'
 import { StatusSelect } from './StatusBadge'
 
 /* ── Dropdown multi-select ─────────────────────────────────────────────────── */
@@ -102,6 +102,7 @@ export default function LeadsDB() {
 
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
+  const [sortBy, setSortBy] = useState<SortMode>('recent')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -191,12 +192,13 @@ export default function LeadsDB() {
     return true
   }), [leads, textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedCategories, selectedSellers, emailFilter, zoneToSellers])
 
-  // Reset page cuando cambian filtros
-  useEffect(() => { setPage(1) }, [textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedCategories, selectedSellers, emailFilter, pageSize])
+  // Reset page cuando cambian filtros u orden
+  useEffect(() => { setPage(1) }, [textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedCategories, selectedSellers, emailFilter, pageSize, sortBy])
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const sorted = useMemo(() => sortLeads(filtered, sortBy), [filtered, sortBy])
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
   const safePage = Math.min(page, totalPages)
-  const paginated = useMemo(() => filtered.slice((safePage - 1) * pageSize, safePage * pageSize), [filtered, safePage, pageSize])
+  const paginated = useMemo(() => sorted.slice((safePage - 1) * pageSize, safePage * pageSize), [sorted, safePage, pageSize])
 
   const updateStatus = async (lead: Lead, status: LeadStatus) => {
     setSavingId(lead.place_id)
@@ -215,7 +217,7 @@ export default function LeadsDB() {
   const exportCSV = () => {
     const fields: (keyof Lead)[] = ['name','address','phone','website','email','status','rating','reviews_count','category','search_query','search_zone','notes']
     const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
-    const csv = [fields.join(','), ...filtered.map(l => fields.map(f => esc(l[f])).join(','))].join('\n')
+    const csv = [fields.join(','), ...sorted.map(l => fields.map(f => esc(l[f])).join(','))].join('\n')
     const a = Object.assign(document.createElement('a'), {
       href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })),
       download: `leads_${new Date().toISOString().slice(0, 10)}.csv`,
@@ -285,6 +287,19 @@ export default function LeadsDB() {
               {v === 'all' ? 'Todos' : v === 'with' ? 'Con email' : 'Sin email'}
             </button>
           ))}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <ArrowUpDown size={13} className="text-scala-text-subtle" />
+          <select
+            value={sortBy}
+            onChange={e => setSortBy(e.target.value as SortMode)}
+            className="px-2 py-2 rounded-lg bg-scala-surface2 border border-white/[0.07] text-xs text-scala-text-primary cursor-pointer focus:outline-none focus:border-scala-blue/50"
+          >
+            {(['recent','quality','rating','reviews'] as SortMode[]).map(s => (
+              <option key={s} value={s}>{SORT_LABEL[s]}</option>
+            ))}
+          </select>
         </div>
 
         <div className="flex gap-2 ml-auto">

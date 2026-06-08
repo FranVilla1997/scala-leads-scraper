@@ -37,6 +37,46 @@ export interface Lead {
   updated_by?: string | null
 }
 
+export type SortMode = 'recent' | 'quality' | 'rating' | 'reviews'
+
+export const SORT_LABEL: Record<SortMode, string> = {
+  recent:  'Más recientes',
+  quality: 'Mejores (rating + reseñas)',
+  rating:  'Mejor calificados',
+  reviews: 'Más reseñas',
+}
+
+/** Bayesian score: prioriza buenos ratings respaldados por suficientes reseñas. */
+function qualityScore(rating: number | null | undefined, reviews: number | null | undefined): number {
+  const r = rating ?? 0
+  const n = reviews ?? 0
+  const m = 4.0   // rating promedio asumido
+  const C = 10    // peso de la prior
+  return (r * n + m * C) / (n + C)
+}
+
+export function sortLeads<T extends { rating: number | null; reviews_count: number | null; scraped_at: string }>(
+  leads: T[],
+  mode: SortMode,
+): T[] {
+  const arr = [...leads]
+  switch (mode) {
+    case 'quality':
+      arr.sort((a, b) => qualityScore(b.rating, b.reviews_count) - qualityScore(a.rating, a.reviews_count))
+      break
+    case 'rating':
+      arr.sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1) || (b.reviews_count ?? 0) - (a.reviews_count ?? 0))
+      break
+    case 'reviews':
+      arr.sort((a, b) => (b.reviews_count ?? 0) - (a.reviews_count ?? 0) || (b.rating ?? 0) - (a.rating ?? 0))
+      break
+    case 'recent':
+    default:
+      arr.sort((a, b) => (b.scraped_at || '').localeCompare(a.scraped_at || ''))
+  }
+  return arr
+}
+
 export interface SSEEvent {
   type: 'status' | 'scraping' | 'lead' | 'done' | 'error'
   message?: string

@@ -1,11 +1,11 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Download, Mail, Phone, Globe, Star, Search, RefreshCw,
-  ExternalLink, Database, MapPin, MessageSquare, Save, X, Loader2,
+  ExternalLink, Database, MapPin, MessageSquare, Save, X, Loader2, ArrowUpDown,
 } from 'lucide-react'
 import { apiFetch, apiJson } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
-import { type Lead, type LeadStatus, STATUS_ORDER, STATUS_LABEL } from '../types'
+import { type Lead, type LeadStatus, type SortMode, STATUS_ORDER, STATUS_LABEL, SORT_LABEL, sortLeads } from '../types'
 import { StatusSelect, StatusBadge } from './StatusBadge'
 
 export default function SellerDashboard() {
@@ -22,6 +22,7 @@ export default function SellerDashboard() {
 
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
+  const [sortBy, setSortBy] = useState<SortMode>('recent')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -86,17 +87,18 @@ export default function SellerDashboard() {
     })
   }, [leads, statusFilter, zoneFilter, categoryFilter, textFilter])
 
-  useEffect(() => { setPage(1) }, [statusFilter, zoneFilter, categoryFilter, textFilter, pageSize])
+  useEffect(() => { setPage(1) }, [statusFilter, zoneFilter, categoryFilter, textFilter, pageSize, sortBy])
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const sorted = useMemo(() => sortLeads(filtered, sortBy), [filtered, sortBy])
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
   const safePage = Math.min(page, totalPages)
-  const paginated = useMemo(() => filtered.slice((safePage - 1) * pageSize, safePage * pageSize), [filtered, safePage, pageSize])
+  const paginated = useMemo(() => sorted.slice((safePage - 1) * pageSize, safePage * pageSize), [sorted, safePage, pageSize])
 
   const exportCSV = () => {
     const fields: (keyof Lead)[] = ['name','address','phone','website','email','status','search_zone','notes']
     const csv = [
       fields.join(','),
-      ...filtered.map(l => fields.map(f => `"${String(l[f] ?? '').replace(/"/g, '""')}"`).join(',')),
+      ...sorted.map(l => fields.map(f => `"${String(l[f] ?? '').replace(/"/g, '""')}"`).join(',')),
     ].join('\n')
     const a = Object.assign(document.createElement('a'), {
       href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })),
@@ -179,6 +181,19 @@ export default function SellerDashboard() {
             <option key={cat} value={cat}>{cat.replace(/_/g, ' ')} ({count})</option>
           ))}
         </select>
+
+        <div className="flex items-center gap-1.5">
+          <ArrowUpDown size={13} className="text-scala-text-subtle" />
+          <select
+            value={sortBy}
+            onChange={e => setSortBy(e.target.value as SortMode)}
+            className="px-2 py-2 rounded-lg bg-scala-surface2 border border-white/[0.07] text-xs text-scala-text-primary cursor-pointer focus:outline-none focus:border-scala-blue/50"
+          >
+            {(['recent','quality','rating','reviews'] as SortMode[]).map(s => (
+              <option key={s} value={s}>{SORT_LABEL[s]}</option>
+            ))}
+          </select>
+        </div>
 
         <div className="flex gap-2 ml-auto">
           {statusFilter !== 'all' && (
