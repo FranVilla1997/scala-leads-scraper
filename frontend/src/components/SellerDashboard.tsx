@@ -2,7 +2,9 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Download, Mail, Phone, Globe, Star, Search, RefreshCw,
   ExternalLink, Database, MapPin, MessageSquare, Save, X, Loader2, ArrowUpDown,
+  PhoneCall, PhoneOff,
 } from 'lucide-react'
+import CallPanel from './CallPanel'
 import { apiFetch, apiJson } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import { type Lead, type LeadStatus, type SortMode, STATUS_ORDER, STATUS_LABEL, SORT_LABEL, sortLeads } from '../types'
@@ -23,6 +25,7 @@ export default function SellerDashboard() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [sortBy, setSortBy] = useState<SortMode>('recent')
+  const [callingLead, setCallingLead] = useState<Lead | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -224,14 +227,14 @@ export default function SellerDashboard() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/[0.07]">
-                {['Negocio', 'Zona', 'Contacto', 'Estado', 'Notas', 'Web'].map(c => (
+                {['', 'Negocio', 'Zona', 'Contacto', 'Estado', 'Notas', 'Web'].map(c => (
                   <th key={c} className="px-4 py-3 text-left text-xs font-medium text-scala-text-muted uppercase tracking-wider whitespace-nowrap">{c}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={6} className="py-16 text-center">
+                <tr><td colSpan={7} className="py-16 text-center">
                   <Database size={28} className="mx-auto mb-3 text-scala-text-subtle opacity-30" />
                   <p className="text-scala-text-muted text-sm">Sin leads para los filtros aplicados</p>
                 </td></tr>
@@ -240,6 +243,22 @@ export default function SellerDashboard() {
                 return (
                   <Fragment key={lead.place_id}>
                     <tr className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
+                      <td className="px-3 py-3">
+                        {lead.do_not_call ? (
+                          <span title="No llamar" className="flex items-center justify-center w-8 h-8 rounded-lg border border-red-500/30 text-red-400">
+                            <PhoneOff size={13} />
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => setCallingLead(lead)}
+                            disabled={!lead.phone}
+                            title={lead.phone ? 'Registrar llamada' : 'Sin teléfono'}
+                            className="flex items-center justify-center w-8 h-8 rounded-lg bg-scala-blue/15 border border-scala-blue/40 text-scala-blue-light hover:bg-scala-blue hover:text-white disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
+                          >
+                            <PhoneCall size={13} />
+                          </button>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <p className="font-medium text-scala-text-primary text-sm leading-tight">{lead.name || '—'}</p>
                         <p className="text-xs text-scala-text-subtle mt-0.5">{lead.address || '—'}</p>
@@ -283,7 +302,7 @@ export default function SellerDashboard() {
                     </tr>
                     {isOpen && (
                       <tr className="bg-scala-surface2/40">
-                        <td colSpan={6} className="px-4 py-3">
+                        <td colSpan={7} className="px-4 py-3">
                           <div className="flex gap-2">
                             <textarea
                               value={noteDraft}
@@ -339,6 +358,14 @@ export default function SellerDashboard() {
           </div>
         )}
       </div>
+
+      {callingLead && (
+        <CallPanel
+          lead={callingLead}
+          onClose={() => setCallingLead(null)}
+          onSaved={() => load()}
+        />
+      )}
     </div>
   )
 }

@@ -2,11 +2,13 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Download, Mail, Phone, Globe, Star, Search,
   RefreshCw, ExternalLink, Database, X, ChevronDown, Check, Loader2, ArrowUpDown,
+  PhoneCall, PhoneOff,
 } from 'lucide-react'
 import { apiFetch, apiJson } from '../lib/api'
 import type { Lead, LeadStatus, Seller, SortMode } from '../types'
 import { STATUS_LABEL, STATUS_ORDER, SORT_LABEL, sortLeads } from '../types'
 import { StatusSelect } from './StatusBadge'
+import CallPanel from './CallPanel'
 
 /* ── Dropdown multi-select ─────────────────────────────────────────────────── */
 function MultiSelect({
@@ -103,6 +105,7 @@ export default function LeadsDB() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [sortBy, setSortBy] = useState<SortMode>('recent')
+  const [callingLead, setCallingLead] = useState<Lead | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -365,7 +368,7 @@ export default function LeadsDB() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/[0.07]">
-                {['Negocio', 'Zona', 'Vendedor', 'Contacto', 'Estado', 'Web', 'Rating'].map(col => (
+                {['', 'Negocio', 'Zona', 'Vendedor', 'Contacto', 'Estado', 'Web', 'Rating'].map(col => (
                   <th key={col} className="px-4 py-3 text-left text-xs font-medium text-scala-text-muted uppercase tracking-wider whitespace-nowrap">{col}</th>
                 ))}
               </tr>
@@ -373,7 +376,7 @@ export default function LeadsDB() {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-16 text-center">
+                  <td colSpan={8} className="py-16 text-center">
                     <Database size={28} className="mx-auto mb-3 text-scala-text-subtle opacity-30" />
                     <p className="text-scala-text-muted text-sm">
                       {leads.length === 0 ? 'No hay leads guardados todavía' : 'Sin resultados para los filtros aplicados'}
@@ -384,6 +387,22 @@ export default function LeadsDB() {
                 const owners = zoneToSellers.get(lead.search_zone) ?? []
                 return (
                   <tr key={lead.place_id || i} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
+                    <td className="px-3 py-3">
+                      {lead.do_not_call ? (
+                        <span title="No llamar" className="flex items-center justify-center w-8 h-8 rounded-lg border border-red-500/30 text-red-400">
+                          <PhoneOff size={13} />
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => setCallingLead(lead)}
+                          disabled={!lead.phone}
+                          title={lead.phone ? 'Registrar llamada' : 'Sin teléfono'}
+                          className="flex items-center justify-center w-8 h-8 rounded-lg bg-scala-blue/15 border border-scala-blue/40 text-scala-blue-light hover:bg-scala-blue hover:text-white disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <PhoneCall size={13} />
+                        </button>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <p className="font-medium text-scala-text-primary text-sm leading-tight">{lead.name || '—'}</p>
                       {lead.search_query && <p className="text-xs text-scala-text-subtle mt-0.5">"{lead.search_query}"</p>}
@@ -469,6 +488,14 @@ export default function LeadsDB() {
           </div>
         )}
       </div>
+
+      {callingLead && (
+        <CallPanel
+          lead={callingLead}
+          onClose={() => setCallingLead(null)}
+          onSaved={() => load()}
+        />
+      )}
     </div>
   )
 }

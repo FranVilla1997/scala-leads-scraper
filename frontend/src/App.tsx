@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { Search, Database, Users, Loader2, BarChart3 } from 'lucide-react'
+import { Search, Database, Users, Loader2, BarChart3, PhoneCall } from 'lucide-react'
 import Header from './components/Header'
 import SearchPanel from './components/SearchPanel'
 import ProgressPanel from './components/ProgressPanel'
@@ -8,12 +8,13 @@ import LeadsDB from './components/LeadsDB'
 import Dashboard from './components/Dashboard'
 import SellerDashboard from './components/SellerDashboard'
 import SellersAdmin from './components/SellersAdmin'
+import CallsTab from './components/CallsTab'
 import Login from './components/Login'
 import { useAuth } from './lib/AuthContext'
 import { API, apiFetch, getAccessToken } from './lib/api'
 import type { Lead, SSEEvent } from './types'
 
-type AdminTab = 'dashboard' | 'scraper' | 'database' | 'sellers'
+type AdminTab = 'dashboard' | 'scraper' | 'database' | 'calls' | 'sellers'
 type SearchState = 'idle' | 'searching' | 'done'
 
 function AdminApp() {
@@ -79,6 +80,7 @@ function AdminApp() {
     { id: 'dashboard', label: 'Dashboard',      icon: BarChart3 },
     { id: 'scraper',   label: 'Scraper',        icon: Search },
     { id: 'database',  label: 'Base de datos',  icon: Database },
+    { id: 'calls',     label: 'Llamadas',       icon: PhoneCall },
     { id: 'sellers',   label: 'Vendedores',     icon: Users },
   ]
 
@@ -116,6 +118,7 @@ function AdminApp() {
 
       {tab === 'dashboard' && <Dashboard />}
       {tab === 'database'  && <LeadsDB />}
+      {tab === 'calls'     && <CallsTab />}
       {tab === 'sellers'   && <SellersAdmin />}
     </>
   )

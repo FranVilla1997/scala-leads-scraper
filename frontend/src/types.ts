@@ -35,6 +35,88 @@ export interface Lead {
   notes: string | null
   updated_at?: string
   updated_by?: string | null
+  do_not_call?: boolean
+  last_called_at?: string | null
+  call_count?: number
+  next_action_at?: string | null
+}
+
+/* ── Llamadas ─────────────────────────────────────────────────────────────── */
+
+export type Disposition =
+  | 'no_atendio' | 'buzon' | 'gatekeeper' | 'no_interesado' | 'interesado'
+  | 'cita_agendada' | 'llamar_despues' | 'numero_equivocado' | 'no_llamar'
+
+export const DISPOSITION_LABEL: Record<Disposition, string> = {
+  no_atendio:        'No atendió',
+  buzon:             'Buzón de voz',
+  gatekeeper:        'Llegué a recepción',
+  no_interesado:     'No interesado',
+  interesado:        'Interesado',
+  cita_agendada:     'Cita agendada',
+  llamar_despues:    'Llamar después',
+  numero_equivocado: 'Número equivocado',
+  no_llamar:         'No llamar más',
+}
+
+/** Orden en que se muestran los botones: primero lo más frecuente. */
+export const DISPOSITION_ORDER: Disposition[] = [
+  'no_atendio', 'buzon', 'gatekeeper', 'no_interesado',
+  'llamar_despues', 'interesado', 'cita_agendada',
+  'numero_equivocado', 'no_llamar',
+]
+
+/** Disposiciones que implican que hablaste con una persona real. */
+export const CONVERSATION_DISPOSITIONS: Disposition[] = [
+  'gatekeeper', 'no_interesado', 'interesado', 'cita_agendada',
+  'llamar_despues', 'no_llamar',
+]
+
+export interface Call {
+  id: string
+  place_id: string
+  caller_type: 'humano' | 'agente_ia'
+  caller_id: string | null
+  caller_email: string | null
+  disposition: Disposition
+  notes: string | null
+  next_step: string | null
+  next_action_at: string | null
+  appointment_at: string | null
+  contact_name: string | null
+  contact_email: string | null
+  recording_url: string | null
+  transcript: string | null
+  transcript_status: 'ninguno' | 'pendiente' | 'listo' | 'error'
+  summary: string | null
+  sentiment: 'positivo' | 'neutral' | 'negativo' | null
+  objections: string[] | null
+  interest_level: 'alto' | 'medio' | 'bajo' | 'ninguno' | null
+  duration_seconds: number | null
+  cost_usd: number | null
+  started_at: string
+  created_at: string
+}
+
+export interface CallQueue {
+  seguimiento: Lead[]
+  nuevos: Lead[]
+  reintentar: Lead[]
+  totals: { seguimiento: number; nuevos: number; reintentar: number }
+}
+
+export interface CallMetrics {
+  total_calls: number
+  calls_last_7d: number
+  conversations: number
+  appointments: number
+  by_disposition: Partial<Record<Disposition, number>>
+  connect_rate: number
+  conversation_to_appt: number
+  calls_per_appointment: number | null
+  total_minutes: number
+  total_cost_usd: number
+  cost_per_appointment: number | null
 }
 
 export type SortMode = 'recent' | 'quality' | 'rating' | 'reviews'

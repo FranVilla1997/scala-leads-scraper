@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import AsyncIterator, Literal
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
@@ -14,12 +14,15 @@ from pydantic import BaseModel
 from auth import CurrentUser, require_admin, require_user
 from config import FRONTEND_URL, SCRAPER_CONCURRENCY
 from db import (
-    create_seller, get_all_leads, get_all_zone_assignments, get_existing_emails,
-    get_seller_zones, list_distinct_zones, list_sellers,
-    set_seller_active, set_seller_zones, update_lead_status, upsert_lead,
+    create_call, create_seller, get_all_leads, get_all_zone_assignments,
+    get_call, get_call_metrics, get_call_queue, get_existing_emails,
+    get_seller_zones, list_calls, list_distinct_zones, list_sellers,
+    set_do_not_call, set_seller_active, set_seller_zones, update_call,
+    update_lead_status, upload_recording, upsert_lead,
 )
 from places import search_places
 from scraper import EmailScraper
+from transcribe import TranscriptionUnavailable, process_recording
 
 app = FastAPI(title="Scala Leads Scraper")
 
@@ -94,6 +97,39 @@ class CreateSellerPayload(BaseModel):
 
 class ActivePayload(BaseModel):
     active: bool
+
+
+DISPOSITIONS = Literal[
+    "no_atendio", "buzon", "gatekeeper", "no_interesado", "interesado",
+    "cita_agendada", "llamar_despues", "numero_equivocado", "no_llamar",
+]
+
+
+class CallCreate(BaseModel):
+    place_id: str
+    disposition: DISPOSITIONS
+    notes: str | None = None
+    next_step: str | None = None
+    next_action_at: datetime | None = None
+    appointment_at: datetime | None = None
+    contact_name: str | None = None
+    contact_email: str | None = None
+    duration_seconds: int | None = None
+    caller_type: Literal["humano", "agente_ia"] = "humano"
+
+
+class CallUpdate(BaseModel):
+    disposition: DISPOSITIONS | None = None
+    notes: str | None = None
+    next_step: str | None = None
+    next_action_at: datetime | None = None
+    appointment_at: datetime | None = None
+    contact_name: str | None = None
+    contact_email: str | None = None
+
+
+class DoNotCallPayload(BaseModel):
+    do_not_call: bool = True
 
 
 # ── Search job ───────────────────────────────────────────────────────────────
@@ -320,6 +356,144 @@ async def export_leads(user: CurrentUser = Depends(require_user)):
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=leads_scala.csv"},
     )
+
+
+# ── Llamadas ─────────────────────────────────────────────────────────────────
+
+def _assert_lead_visible(place_id: str, user: CurrentUser) -> None:
+    """Un vendedor solo puede operar sobre leads de sus zonas."""
+    if user.is_admin:
+        return
+    leads = get_all_leads(zones=user.zones)
+    if not any(l["place_id"] == place_id for l in leads):
+        raise HTTPException(status_code=403, detail="Lead fuera de tus zonas asignadas")
+
+
+@app.post("/api/calls")
+async def post_call(body: CallCreate, user: CurrentUser = Depends(require_user)):
+    """Registra el resultado de una llamada (humana o del agente)."""
+    _assert_lead_visible(body.place_id, user)
+
+    payload = body.model_dump(exclude_none=True)
+    for field in ("next_action_at", "appointment_at"):
+        if payload.get(field):
+            payload[field] = payload[field].isoformat()
+
+    payload.update({
+        "caller_id": user.id,
+        "caller_email": user.email,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    call = create_call(payload)
+    if not call:
+        raise HTTPException(status_code=500, detail="No se pudo registrar la llamada")
+    return call
+
+
+@app.patch("/api/calls/{call_id}")
+async def patch_call(call_id: str, body: CallUpdate, user: CurrentUser = Depends(require_user)):
+    existing = get_call(call_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Llamada no encontrada")
+    _assert_lead_visible(existing["place_id"], user)
+
+    patch = body.model_dump(exclude_none=True)
+    for field in ("next_action_at", "appointment_at"):
+        if patch.get(field):
+            patch[field] = patch[field].isoformat()
+
+    updated = update_call(call_id, patch)
+    if not updated:
+        raise HTTPException(status_code=500, detail="No se pudo actualizar")
+    return updated
+
+
+@app.post("/api/calls/{call_id}/audio")
+async def post_call_audio(
+    call_id: str,
+    file: UploadFile = File(...),
+    duration_seconds: int | None = Form(default=None),
+    user: CurrentUser = Depends(require_user),
+):
+    """Sube la grabación, la transcribe y guarda el análisis post-llamada."""
+    existing = get_call(call_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Llamada no encontrada")
+    _assert_lead_visible(existing["place_id"], user)
+
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(status_code=400, detail="Audio vacío")
+
+    ext = (file.filename or "audio.webm").rsplit(".", 1)[-1][:8] or "webm"
+    path = f"{existing['place_id']}/{call_id}.{ext}"
+
+    loop = asyncio.get_event_loop()
+    url = await loop.run_in_executor(
+        None, upload_recording, path, audio, file.content_type or "audio/webm"
+    )
+
+    patch: dict = {
+        "recording_path": path,
+        "recording_url": url,
+        "transcript_source": "browser",
+        "transcript_status": "pendiente",
+    }
+    if duration_seconds:
+        patch["duration_seconds"] = duration_seconds
+    update_call(call_id, patch)
+
+    # Transcribir + analizar
+    try:
+        result = await loop.run_in_executor(
+            None, process_recording, audio, file.filename or "call.webm", duration_seconds
+        )
+    except TranscriptionUnavailable as e:
+        update_call(call_id, {"transcript_status": "error"})
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        update_call(call_id, {"transcript_status": "error"})
+        raise HTTPException(status_code=500, detail=f"Error al transcribir: {e}")
+
+    suggested_step = result.pop("_next_step", None)
+    asked_no_contact = result.pop("_do_not_call", False)
+
+    if suggested_step and not existing.get("next_step"):
+        result["next_step"] = suggested_step
+
+    updated = update_call(call_id, result)
+
+    if asked_no_contact:
+        set_do_not_call(existing["place_id"], True)
+
+    return updated
+
+
+@app.get("/api/calls")
+async def get_calls(place_id: str | None = None, user: CurrentUser = Depends(require_user)):
+    zones = None if user.is_admin else user.zones
+    return list_calls(zones=zones, place_id=place_id)
+
+
+@app.get("/api/calls/queue")
+async def get_queue(user: CurrentUser = Depends(require_user)):
+    zones = None if user.is_admin else user.zones
+    return get_call_queue(zones=zones)
+
+
+@app.get("/api/calls/metrics")
+async def get_metrics(user: CurrentUser = Depends(require_user)):
+    zones = None if user.is_admin else user.zones
+    return get_call_metrics(zones=zones)
+
+
+@app.patch("/api/leads/{place_id}/do-not-call")
+async def patch_do_not_call(place_id: str, body: DoNotCallPayload,
+                            user: CurrentUser = Depends(require_user)):
+    _assert_lead_visible(place_id, user)
+    set_do_not_call(place_id, body.do_not_call)
+    return {"ok": True, "do_not_call": body.do_not_call}
 
 
 # ── Admin: sellers & zones ───────────────────────────────────────────────────
