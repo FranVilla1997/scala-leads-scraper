@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   X, Phone, Star, Globe, ExternalLink, Mic, Square, Loader2, Save,
-  AlertCircle, CheckCircle2, MapPin, Mail, History, Trash2,
+  AlertCircle, CheckCircle2, MapPin, Mail, History, Trash2, Upload,
 } from 'lucide-react'
 import { API, apiFetch, apiJson, getAccessToken } from '../lib/api'
 import {
@@ -123,6 +123,20 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
     setAudioBlob(null)
     setAudioUrl(null)
     setElapsed(0)
+  }
+
+  /** Alternativa a grabar en el navegador: subir un audio grabado en el celular. */
+  const handleFilePick = (file: File) => {
+    if (audioUrl) URL.revokeObjectURL(audioUrl)
+    setMicError(null)
+    setAudioBlob(file)
+    setAudioUrl(URL.createObjectURL(file))
+
+    // Leer la duración real del archivo para el costo y las métricas
+    const probe = new Audio(URL.createObjectURL(file))
+    probe.onloadedmetadata = () => {
+      if (Number.isFinite(probe.duration)) setElapsed(Math.round(probe.duration))
+    }
   }
 
   // ── Guardar ────────────────────────────────────────────────────────────────
@@ -279,9 +293,19 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
                     {fmtDuration(elapsed)}
                   </span>
                   {!recording && (
-                    <span className="text-xs text-scala-text-subtle ml-auto">
-                      Poné el celular en altavoz
-                    </span>
+                    <div className="ml-auto flex items-center gap-3">
+                      <span className="text-xs text-scala-text-subtle">celular en altavoz</span>
+                      <span className="text-xs text-scala-text-subtle">o</span>
+                      <label className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-white/10 text-xs text-scala-text-muted hover:text-scala-text-primary hover:border-white/25 cursor-pointer transition-colors">
+                        <Upload size={13} /> Subir audio
+                        <input
+                          type="file"
+                          accept="audio/*,video/mp4,.m4a"
+                          className="hidden"
+                          onChange={e => { const f = e.target.files?.[0]; if (f) handleFilePick(f) }}
+                        />
+                      </label>
+                    </div>
                   )}
                 </div>
               ) : (
