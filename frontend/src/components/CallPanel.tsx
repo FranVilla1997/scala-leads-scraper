@@ -55,6 +55,7 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
   const [transcribing, setTranscribing] = useState(false)
 
   const [history, setHistory] = useState<Call[]>([])
+  const savedRef = useRef(false)
 
   // ── Grabación ──────────────────────────────────────────────────────────────
   const [recording, setRecording] = useState(false)
@@ -165,6 +166,7 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
         throw new Error(err.detail || `${res.status} ${res.statusText}`)
       }
       let call = await res.json() as Call
+      savedRef.current = true
 
       // Subir audio (si hay) y esperar la transcripción
       if (audioBlob) {
@@ -183,7 +185,14 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
           call = await up.json() as Call
         } else {
           const err = await up.json().catch(() => ({})) as { detail?: string }
-          setError(`Llamada guardada, pero falló la transcripción: ${err.detail ?? up.status}`)
+          setTranscribing(false)
+          setSaving(false)
+          setError(
+            `✔ Llamada y audio GUARDADOS. Solo falló la transcripción (${err.detail ?? up.status}). ` +
+            'La podés transcribir después desde el historial con "Transcribir pendientes".'
+          )
+          onSaved?.(call)
+          return  // no cerramos: que el mensaje se lea
         }
         setTranscribing(false)
       }
@@ -198,7 +207,15 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
     }
   }
 
-  const needsAppointment = disposition === 'cita_agendada'
+  const tryClose = () => {
+    if (!savedRef.current && (recording || audioBlob)) {
+      const ok = window.confirm('Tenés una grabación sin guardar. Si cerrás ahora se pierde. ¿Cerrar igual?')
+      if (!ok) return
+    }
+    onClose()
+  }
+
+  const needsAppointment = disposition === 'cita_agendada' 
   const needsFollowUp = disposition === 'llamar_despues' || disposition === 'interesado'
 
   // Atajo: la ventana de 72hs que recomienda el sistema
@@ -209,7 +226,7 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm" onClick={tryClose}>
       <div
         className="w-full max-w-xl h-full overflow-y-auto bg-scala-surface1 border-l border-white/10 shadow-2xl"
         onClick={e => e.stopPropagation()}
@@ -231,7 +248,7 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
               {lead.call_count ? <span>· {lead.call_count} llamada(s) previas</span> : null}
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-scala-text-muted hover:text-scala-text-primary hover:bg-white/5">
+          <button onClick={tryClose} className="p-1.5 rounded-lg text-scala-text-muted hover:text-scala-text-primary hover:bg-white/5">
             <X size={18} />
           </button>
         </div>
@@ -479,6 +496,14 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
                     </div>
                     {c.summary && <p className="text-scala-text-muted mt-1.5 leading-relaxed">{c.summary}</p>}
                     {c.notes && <p className="text-scala-text-subtle mt-1 italic">{c.notes}</p>}
+                    {c.recording_url && (
+                      <div className="mt-2 space-y-1">
+                        <audio controls preload="none" src={c.recording_url} className="w-full h-8" />
+                        {!c.transcript && (
+                          <p className="text-[10px] text-yellow-300">Audio guardado — sin transcribir todavía</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

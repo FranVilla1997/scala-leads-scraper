@@ -18,7 +18,7 @@ from db import (
     download_recording, get_call, get_call_metrics, get_call_queue, get_existing_emails,
     list_calls_pending_transcript,
     get_seller_zones, list_calls, list_distinct_zones, list_sellers,
-    set_do_not_call, set_seller_active, set_seller_zones, update_call,
+    set_do_not_call, set_seller_active, set_seller_zones, sign_recording, update_call,
     update_lead_status, upload_recording, upsert_lead,
 )
 from places import search_places
@@ -469,6 +469,23 @@ async def post_call_audio(
         set_do_not_call(existing["place_id"], True)
 
     return updated
+
+
+@app.get("/api/calls/{call_id}/recording-url")
+async def get_recording_url(call_id: str, user: CurrentUser = Depends(require_user)):
+    """URL firmada fresca — las guardadas vencen a los 7 días."""
+    existing = get_call(call_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Llamada no encontrada")
+    _assert_lead_visible(existing["place_id"], user)
+    path = existing.get("recording_path")
+    if not path:
+        raise HTTPException(status_code=404, detail="Sin grabación")
+    url = sign_recording(path)
+    if not url:
+        raise HTTPException(status_code=500, detail="No se pudo firmar la URL")
+    update_call(call_id, {"recording_url": url})
+    return {"url": url}
 
 
 @app.post("/api/calls/{call_id}/transcribe")

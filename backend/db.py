@@ -390,3 +390,13 @@ def list_calls_pending_transcript(zones: list[str] | None = None) -> list[dict]:
         c for c in list_calls(zones=zones, limit=5000)
         if c.get("recording_path") and not c.get("transcript")
     ]
+
+
+def sign_recording(path: str, expires_seconds: int = 60 * 60 * 24 * 7) -> str | None:
+    """Genera una URL firmada fresca para una grabación ya subida."""
+    try:
+        signed = get_client().storage.from_(RECORDINGS_BUCKET).create_signed_url(path, expires_seconds)
+        return signed.get("signedURL") or signed.get("signedUrl")
+    except Exception as e:
+        print(f"[db] sign_recording error: {e}")
+        return None
