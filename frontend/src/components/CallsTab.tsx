@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Phone, RefreshCw, Star, Clock, Flame, RotateCcw, FileText, X,
-  TrendingUp, DollarSign, CalendarCheck, MessageSquare, ChevronRight,
+  Phone, RefreshCw, Star, Clock, Flame, RotateCcw, FileText, X, Loader2,
+  TrendingUp, DollarSign, CalendarCheck, MessageSquare, ChevronRight, Sparkles,
 } from 'lucide-react'
-import { apiJson } from '../lib/api'
+import { apiFetch, apiJson } from '../lib/api'
 import {
   type Call, type CallMetrics, type CallQueue, type Lead,
   DISPOSITION_LABEL,
@@ -61,6 +61,8 @@ export default function CallsTab() {
   const [activeQueue, setActiveQueue] = useState<QueueKey>('seguimiento')
   const [callingLead, setCallingLead] = useState<Lead | null>(null)
   const [openCall, setOpenCall] = useState<Call | null>(null)
+  const [transcribing, setTranscribing] = useState<string | null>(null)
+  const [bulkMsg, setBulkMsg] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -82,6 +84,39 @@ export default function CallsTab() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  const transcribeOne = async (call: Call) => {
+    setTranscribing(call.id)
+    try {
+      const res = await apiFetch(`/api/calls/${call.id}/transcribe`, { method: 'POST' })
+      if (res.ok) {
+        const updated = await res.json() as Call
+        setOpenCall(updated)
+        setCalls(prev => prev.map(c => c.id === updated.id ? updated : c))
+      } else {
+        const err = await res.json().catch(() => ({})) as { detail?: string }
+        setBulkMsg(err.detail || 'No se pudo transcribir')
+      }
+    } finally { setTranscribing(null) }
+  }
+
+  const transcribePending = async () => {
+    setBulkMsg('Procesando...')
+    const res = await apiFetch('/api/calls/transcribe-pending', { method: 'POST' })
+    if (res.ok) {
+      const r = await res.json() as { pendientes: number; transcriptas: number; fallidas: number }
+      setBulkMsg(`${r.transcriptas} de ${r.pendientes} transcriptas${r.fallidas ? ` · ${r.fallidas} fallaron` : ''}`)
+      load()
+    } else {
+      const err = await res.json().catch(() => ({})) as { detail?: string }
+      setBulkMsg(err.detail || 'Error')
+    }
+  }
+
+  const pendingCount = useMemo(
+    () => calls.filter(c => c.recording_url && !c.transcript).length,
+    [calls],
+  )
 
   const leadsByPlace = useMemo(() => {
     const m = new Map<string, Lead>()
@@ -173,11 +208,20 @@ export default function CallsTab() {
 
       {/* Historial */}
       <div className="rounded-xl border border-white/[0.07] bg-scala-surface1 overflow-hidden">
-        <div className="px-5 py-3 border-b border-white/[0.07]">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-white/[0.07]">
           <h2 className="text-sm font-medium text-scala-text-primary">
             Historial de llamadas
             <span className="ml-2 text-xs text-scala-text-muted font-normal">{calls.length}</span>
           </h2>
+          <div className="flex items-center gap-3">
+            {bulkMsg && <span className="text-xs text-scala-text-muted">{bulkMsg}</span>}
+            {pendingCount > 0 && (
+              <button onClick={transcribePending}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-scala-blue/15 border border-scala-blue/40 text-xs text-scala-blue-light hover:bg-scala-blue hover:text-white transition-colors">
+                <Sparkles size={12} /> Transcribir {pendingCount} pendiente{pendingCount > 1 ? 's' : ''}
+              </button>
+            )}
+          </div>
         </div>
         {calls.length === 0 ? (
           <div className="py-12 text-center">
@@ -266,7 +310,18 @@ export default function CallsTab() {
 
             <div className="p-6 space-y-5">
               {openCall.recording_url && (
-                <audio controls src={openCall.recording_url} className="w-full h-10" />
+                <div className="space-y-2">
+                  <audio controls src={openCall.recording_url} className="w-full h-10" />
+                  {!openCall.transcript && (
+                    <button onClick={() => transcribeOne(openCall)}
+                            disabled={transcribing === openCall.id}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-scala-blue/15 border border-scala-blue/40 text-xs text-scala-blue-light hover:bg-scala-blue hover:text-white disabled:opacity-50 transition-colors">
+                      {transcribing === openCall.id
+                        ? <><Loader2 size={12} className="animate-spin" /> Transcribiendo...</>
+                        : <><Sparkles size={12} /> Transcribir ahora</>}
+                    </button>
+                  )}
+                </div>
               )}
 
               {openCall.summary && (

@@ -15,7 +15,8 @@ from auth import CurrentUser, require_admin, require_user
 from config import FRONTEND_URL, SCRAPER_CONCURRENCY
 from db import (
     create_call, create_seller, get_all_leads, get_all_zone_assignments,
-    get_call, get_call_metrics, get_call_queue, get_existing_emails,
+    download_recording, get_call, get_call_metrics, get_call_queue, get_existing_emails,
+    list_calls_pending_transcript,
     get_seller_zones, list_calls, list_distinct_zones, list_sellers,
     set_do_not_call, set_seller_active, set_seller_zones, update_call,
     update_lead_status, upload_recording, upsert_lead,
@@ -468,6 +469,67 @@ async def post_call_audio(
         set_do_not_call(existing["place_id"], True)
 
     return updated
+
+
+@app.post("/api/calls/{call_id}/transcribe")
+async def post_transcribe(call_id: str, user: CurrentUser = Depends(require_user)):
+    """Transcribe una grabación ya subida. Sirve para procesar el backlog
+    cuando la transcripción falló (por ejemplo, sin crédito en la API)."""
+    existing = get_call(call_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Llamada no encontrada")
+    _assert_lead_visible(existing["place_id"], user)
+
+    path = existing.get("recording_path")
+    if not path:
+        raise HTTPException(status_code=400, detail="Esta llamada no tiene grabación")
+
+    loop = asyncio.get_event_loop()
+    audio = await loop.run_in_executor(None, download_recording, path)
+    if not audio:
+        raise HTTPException(status_code=404, detail="No se pudo bajar la grabación")
+
+    update_call(call_id, {"transcript_status": "pendiente"})
+    try:
+        result = await loop.run_in_executor(
+            None, process_recording, audio, path.rsplit("/", 1)[-1],
+            existing.get("duration_seconds"),
+        )
+    except TranscriptionUnavailable as e:
+        update_call(call_id, {"transcript_status": "error"})
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        update_call(call_id, {"transcript_status": "error"})
+        raise HTTPException(status_code=500, detail=f"Error al transcribir: {e}")
+
+    suggested = result.pop("_next_step", None)
+    asked_no_contact = result.pop("_do_not_call", False)
+    if suggested and not existing.get("next_step"):
+        result["next_step"] = suggested
+
+    updated = update_call(call_id, result)
+    if asked_no_contact:
+        set_do_not_call(existing["place_id"], True)
+    return updated
+
+
+@app.post("/api/calls/transcribe-pending")
+async def post_transcribe_pending(user: CurrentUser = Depends(require_admin)):
+    """Procesa de una todas las llamadas con audio sin transcribir."""
+    zones = None if user.is_admin else user.zones
+    pending = list_calls_pending_transcript(zones=zones)
+    done, failed = 0, 0
+    for c in pending:
+        try:
+            await post_transcribe(c["id"], user)
+            done += 1
+        except HTTPException as e:
+            failed += 1
+            if e.status_code == 503:  # sin credito / sin key: no tiene sentido seguir
+                break
+        except Exception:
+            failed += 1
+    return {"pendientes": len(pending), "transcriptas": done, "fallidas": failed}
 
 
 @app.get("/api/calls")

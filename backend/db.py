@@ -373,3 +373,20 @@ def list_distinct_zones() -> list[str]:
     except Exception as e:
         print(f"[db] list_distinct_zones error: {e}")
         return []
+
+
+def download_recording(path: str) -> bytes | None:
+    """Baja una grabación ya subida (para re-transcribir más tarde)."""
+    try:
+        return get_client().storage.from_(RECORDINGS_BUCKET).download(path)
+    except Exception as e:
+        print(f"[db] download_recording error: {e}")
+        return None
+
+
+def list_calls_pending_transcript(zones: list[str] | None = None) -> list[dict]:
+    """Llamadas que tienen audio guardado pero todavía no fueron transcriptas."""
+    return [
+        c for c in list_calls(zones=zones, limit=5000)
+        if c.get("recording_path") and not c.get("transcript")
+    ]
