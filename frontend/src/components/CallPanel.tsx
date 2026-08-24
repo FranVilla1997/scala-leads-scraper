@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   X, Phone, Star, Globe, ExternalLink, Mic, Square, Loader2, Save,
-  AlertCircle, CheckCircle2, MapPin, Mail, History, Trash2, Upload,
+  AlertCircle, CheckCircle2, MapPin, Mail, History, Trash2, Upload, MessageCircle,
 } from 'lucide-react'
 import { API, apiFetch, apiJson, getAccessToken } from '../lib/api'
+import { waLink, WA_DEFAULT_TEXT } from '../lib/phone'
 import {
   type Call, type Disposition, type Lead,
   DISPOSITION_LABEL, DISPOSITION_ORDER,
@@ -239,10 +240,19 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
           {/* Contexto para tener a la vista mientras hablás */}
           <div className="rounded-xl border border-white/[0.07] bg-scala-surface2 p-4 space-y-2.5">
             {lead.phone ? (
-              <a href={`tel:${lead.phone}`}
-                 className="flex items-center gap-2.5 text-lg font-semibold text-scala-green hover:underline">
-                <Phone size={18} />{lead.phone}
-              </a>
+              <div className="flex flex-wrap items-center gap-3">
+                <a href={`tel:${lead.phone}`}
+                   className="flex items-center gap-2.5 text-lg font-semibold text-scala-green hover:underline">
+                  <Phone size={18} />{lead.phone}
+                </a>
+                {waLink(lead.phone, WA_DEFAULT_TEXT) && (
+                  <a href={waLink(lead.phone, WA_DEFAULT_TEXT)!}
+                     target="_blank" rel="noopener noreferrer"
+                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#25D366]/15 border border-[#25D366]/40 text-xs font-medium text-[#25D366] hover:bg-[#25D366] hover:text-white transition-colors">
+                    <MessageCircle size={13} /> Enviar WhatsApp
+                  </a>
+                )}
+              </div>
             ) : (
               <p className="text-sm text-scala-text-subtle">Sin teléfono registrado</p>
             )}

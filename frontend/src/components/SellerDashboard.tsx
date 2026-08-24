@@ -2,9 +2,10 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Download, Mail, Phone, Globe, Star, Search, RefreshCw,
   ExternalLink, Database, MapPin, MessageSquare, Save, X, Loader2, ArrowUpDown,
-  PhoneCall, PhoneOff,
+  PhoneCall, PhoneOff, MessageCircle,
 } from 'lucide-react'
 import CallPanel from './CallPanel'
+import { waLink, WA_DEFAULT_TEXT } from '../lib/phone'
 import { apiFetch, apiJson } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import { type Lead, type LeadStatus, type SortMode, STATUS_ORDER, STATUS_LABEL, SORT_LABEL, sortLeads } from '../types'
@@ -273,7 +274,16 @@ export default function SellerDashboard() {
                         <span className="px-2 py-0.5 rounded-full text-xs bg-scala-blue/10 text-scala-blue-light border border-scala-blue/20">{lead.search_zone || '—'}</span>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap space-y-1">
-                        {lead.phone && <a href={`tel:${lead.phone}`} className="flex items-center gap-1.5 text-xs text-scala-text-muted hover:text-scala-text-primary"><Phone size={12} />{lead.phone}</a>}
+                        {lead.phone && (
+                          <span className="flex items-center gap-2">
+                            <a href={`tel:${lead.phone}`} className="flex items-center gap-1.5 text-xs text-scala-text-muted hover:text-scala-text-primary"><Phone size={12} />{lead.phone}</a>
+                            {waLink(lead.phone, WA_DEFAULT_TEXT) && (
+                              <a href={waLink(lead.phone, WA_DEFAULT_TEXT)!} target="_blank" rel="noopener noreferrer"
+                                 title="Enviar WhatsApp"
+                                 className="text-[#25D366] hover:scale-110 transition-transform"><MessageCircle size={13} /></a>
+                            )}
+                          </span>
+                        )}
                         {lead.email && <a href={`mailto:${lead.email}`} className="flex items-center gap-1.5 text-xs font-medium text-scala-green hover:underline"><Mail size={12} />{lead.email}</a>}
                         {!lead.phone && !lead.email && <span className="text-xs text-scala-text-subtle">—</span>}
                       </td>
