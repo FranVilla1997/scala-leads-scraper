@@ -2,7 +2,7 @@ import { useState, useRef, type FormEvent, type KeyboardEvent } from 'react'
 import { Search, MapPin, Briefcase, Loader2, Layers, X, Plus } from 'lucide-react'
 
 interface Props {
-  onSearch: (query: string, zones: string[], maxResults: number) => void
+  onSearch: (queries: string[], zones: string[], maxResults: number) => void
   isSearching: boolean
 }
 
@@ -16,43 +16,63 @@ const COVERAGE_OPTIONS = [
 const SUGGESTED_CITIES = ['Palermo', 'Belgrano', 'Recoleta', 'San Telmo', 'Caballito', 'Flores']
 
 export default function SearchPanel({ onSearch, isSearching }: Props) {
-  const [query, setQuery] = useState('')
+  const [queries, setQueries] = useState<string[]>([])
+  const [queryInput, setQueryInput] = useState('')
   const [zones, setZones] = useState<string[]>([])
   const [zoneInput, setZoneInput] = useState('')
   const [maxResults, setMaxResults] = useState(60)
+  const queryRef = useRef<HTMLInputElement>(null)
   const zoneRef = useRef<HTMLInputElement>(null)
+
+  const addQuery = (value: string) => {
+    const v = value.trim()
+    if (v && !queries.some(q => q.toLowerCase() === v.toLowerCase())) {
+      setQueries(prev => [...prev, v])
+    }
+    setQueryInput('')
+  }
+  const removeQuery = (q: string) => setQueries(prev => prev.filter(x => x !== q))
 
   const addZone = (value: string) => {
     const v = value.trim()
-    if (v && !zones.includes(v)) {
-      setZones(prev => [...prev, v])
-    }
+    if (v && !zones.includes(v)) setZones(prev => [...prev, v])
     setZoneInput('')
   }
-
   const removeZone = (z: string) => setZones(prev => prev.filter(x => x !== z))
 
-  const handleZoneKey = (e: KeyboardEvent<HTMLInputElement>) => {
+  const handleChipKey = (
+    e: KeyboardEvent<HTMLInputElement>,
+    inputValue: string,
+    list: string[],
+    add: (v: string) => void,
+    setList: React.Dispatch<React.SetStateAction<string[]>>,
+  ) => {
     if (e.key === 'Enter' || e.key === ',') {
       e.preventDefault()
-      addZone(zoneInput)
-    } else if (e.key === 'Backspace' && !zoneInput && zones.length > 0) {
-      setZones(prev => prev.slice(0, -1))
+      add(inputValue)
+    } else if (e.key === 'Backspace' && !inputValue && list.length > 0) {
+      setList(prev => prev.slice(0, -1))
     }
   }
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
-    const pending = zoneInput.trim()
-    const allZones = pending && !zones.includes(pending) ? [...zones, pending] : zones
-    if (query.trim() && allZones.length > 0 && !isSearching) {
-      setZones(allZones)
-      setZoneInput('')
-      onSearch(query.trim(), allZones, maxResults)
+    // commitear cualquier input pendiente
+    const qPending = queryInput.trim()
+    const zPending = zoneInput.trim()
+    const allQueries = qPending && !queries.some(q => q.toLowerCase() === qPending.toLowerCase()) ? [...queries, qPending] : queries
+    const allZones = zPending && !zones.includes(zPending) ? [...zones, zPending] : zones
+    if (allQueries.length && allZones.length && !isSearching) {
+      setQueries(allQueries); setZones(allZones)
+      setQueryInput(''); setZoneInput('')
+      onSearch(allQueries, allZones, maxResults)
     }
   }
 
-  const canSearch = query.trim() && (zones.length > 0 || zoneInput.trim()) && !isSearching
+  const totalQueries = queries.length + (queryInput.trim() ? 1 : 0)
+  const totalZones   = zones.length   + (zoneInput.trim() ? 1 : 0)
+  const canSearch    = totalQueries > 0 && totalZones > 0 && !isSearching
+  const estimatedMax = totalQueries * totalZones * maxResults
 
   return (
     <div className="rounded-xl border border-white/[0.07] bg-scala-surface1 p-6 mb-6">
@@ -61,18 +81,43 @@ export default function SearchPanel({ onSearch, isSearching }: Props) {
       </h2>
 
       <form onSubmit={handleSubmit} className="space-y-3">
-        {/* Row 1: query + button */}
+        {/* Row 1: queries chip input + submit */}
         <div className="flex gap-3">
-          <div className="relative flex-1">
-            <Briefcase size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-scala-text-subtle pointer-events-none" />
+          <div
+            className="flex flex-wrap items-center gap-1.5 min-h-[42px] flex-1 px-3 py-2 rounded-lg bg-scala-surface2 border border-white/[0.07] focus-within:border-scala-blue/50 focus-within:ring-1 focus-within:ring-scala-blue/30 cursor-text transition-colors"
+            onClick={() => queryRef.current?.focus()}
+          >
+            <Briefcase size={14} className="text-scala-text-subtle shrink-0" />
+            {queries.map(q => (
+              <span key={q} className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-scala-green/15 border border-scala-green/30 text-xs text-scala-green font-medium">
+                {q}
+                {!isSearching && (
+                  <button type="button" onClick={e => { e.stopPropagation(); removeQuery(q) }} className="hover:text-white transition-colors">
+                    <X size={11} />
+                  </button>
+                )}
+              </span>
+            ))}
             <input
+              ref={queryRef}
               type="text"
-              placeholder="Tipo de negocio (ej: dentistas, restaurants, abogados)"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
+              value={queryInput}
+              onChange={e => setQueryInput(e.target.value)}
+              onKeyDown={e => handleChipKey(e, queryInput, queries, addQuery, setQueries)}
+              onBlur={() => { if (queryInput.trim()) addQuery(queryInput) }}
               disabled={isSearching}
-              className="w-full pl-9 pr-4 py-2.5 rounded-lg bg-scala-surface2 border border-white/[0.07] text-sm text-scala-text-primary placeholder:text-scala-text-subtle focus:outline-none focus:border-scala-blue/50 focus:ring-1 focus:ring-scala-blue/30 disabled:opacity-50 transition-colors"
+              placeholder={queries.length === 0 ? 'Tipo de negocio (Enter para agregar otro) — ej: dentistas, odontólogos' : 'Agregar otra keyword...'}
+              className="flex-1 min-w-[180px] bg-transparent text-sm text-scala-text-primary placeholder:text-scala-text-subtle focus:outline-none disabled:opacity-50"
             />
+            {queryInput.trim() && (
+              <button
+                type="button"
+                onClick={() => addQuery(queryInput)}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs text-scala-text-muted hover:text-scala-text-primary border border-white/10 hover:border-white/20 transition-colors"
+              >
+                <Plus size={11} /> Agregar
+              </button>
+            )}
           </div>
           <button
             type="submit"
@@ -106,7 +151,7 @@ export default function SearchPanel({ onSearch, isSearching }: Props) {
             type="text"
             value={zoneInput}
             onChange={e => setZoneInput(e.target.value)}
-            onKeyDown={handleZoneKey}
+            onKeyDown={e => handleChipKey(e, zoneInput, zones, addZone, setZones)}
             onBlur={() => { if (zoneInput.trim()) addZone(zoneInput) }}
             disabled={isSearching}
             placeholder={zones.length === 0 ? 'Ciudad o zona — Enter para agregar más' : 'Agregar otra ciudad...'}
@@ -123,9 +168,9 @@ export default function SearchPanel({ onSearch, isSearching }: Props) {
           )}
         </div>
 
-        {zones.length > 1 && (
+        {(totalQueries > 1 || totalZones > 1) && (
           <p className="text-xs text-scala-text-muted pl-1">
-            Se van a buscar <span className="text-scala-text-primary font-medium">{zones.length} zonas</span> — hasta <span className="text-scala-text-primary font-medium">{zones.length * maxResults}</span> resultados totales
+            Se van a correr <span className="text-scala-text-primary font-medium">{totalQueries} keyword(s)</span> × <span className="text-scala-text-primary font-medium">{totalZones} zona(s)</span> = <span className="text-scala-text-primary font-medium">{totalQueries * totalZones} búsquedas</span> — hasta <span className="text-scala-text-primary font-medium">{estimatedMax.toLocaleString()}</span> resultados totales antes de deduplicar
           </p>
         )}
       </form>

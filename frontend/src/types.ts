@@ -1,3 +1,22 @@
+export type LeadStatus =
+  | 'nuevo'
+  | 'contactado'
+  | 'interesado'
+  | 'cerrado_ganado'
+  | 'cerrado_perdido'
+
+export const STATUS_LABEL: Record<LeadStatus, string> = {
+  nuevo:            'Nuevo',
+  contactado:       'Contactado',
+  interesado:       'Interesado',
+  cerrado_ganado:   'Cerrado · Ganado',
+  cerrado_perdido:  'Cerrado · Perdido',
+}
+
+export const STATUS_ORDER: LeadStatus[] = [
+  'nuevo', 'contactado', 'interesado', 'cerrado_ganado', 'cerrado_perdido',
+]
+
 export interface Lead {
   id?: string
   place_id: string
@@ -12,6 +31,132 @@ export interface Lead {
   search_query: string
   search_zone: string
   scraped_at: string
+  status: LeadStatus
+  notes: string | null
+  updated_at?: string
+  updated_by?: string | null
+  do_not_call?: boolean
+  last_called_at?: string | null
+  call_count?: number
+  next_action_at?: string | null
+}
+
+/* ── Llamadas ─────────────────────────────────────────────────────────────── */
+
+export type Disposition =
+  | 'no_atendio' | 'buzon' | 'gatekeeper' | 'no_interesado' | 'interesado'
+  | 'cita_agendada' | 'llamar_despues' | 'numero_equivocado' | 'no_llamar'
+
+export const DISPOSITION_LABEL: Record<Disposition, string> = {
+  no_atendio:        'No atendió',
+  buzon:             'Buzón de voz',
+  gatekeeper:        'Llegué a recepción',
+  no_interesado:     'No interesado',
+  interesado:        'Interesado',
+  cita_agendada:     'Cita agendada',
+  llamar_despues:    'Llamar después',
+  numero_equivocado: 'Número equivocado',
+  no_llamar:         'No llamar más',
+}
+
+/** Orden en que se muestran los botones: primero lo más frecuente. */
+export const DISPOSITION_ORDER: Disposition[] = [
+  'no_atendio', 'buzon', 'gatekeeper', 'no_interesado',
+  'llamar_despues', 'interesado', 'cita_agendada',
+  'numero_equivocado', 'no_llamar',
+]
+
+/** Disposiciones que implican que hablaste con una persona real. */
+export const CONVERSATION_DISPOSITIONS: Disposition[] = [
+  'gatekeeper', 'no_interesado', 'interesado', 'cita_agendada',
+  'llamar_despues', 'no_llamar',
+]
+
+export interface Call {
+  id: string
+  place_id: string
+  caller_type: 'humano' | 'agente_ia'
+  caller_id: string | null
+  caller_email: string | null
+  disposition: Disposition
+  notes: string | null
+  next_step: string | null
+  next_action_at: string | null
+  appointment_at: string | null
+  contact_name: string | null
+  contact_email: string | null
+  recording_url: string | null
+  transcript: string | null
+  transcript_status: 'ninguno' | 'pendiente' | 'listo' | 'error'
+  summary: string | null
+  sentiment: 'positivo' | 'neutral' | 'negativo' | null
+  objections: string[] | null
+  interest_level: 'alto' | 'medio' | 'bajo' | 'ninguno' | null
+  duration_seconds: number | null
+  cost_usd: number | null
+  started_at: string
+  created_at: string
+}
+
+export interface CallQueue {
+  seguimiento: Lead[]
+  nuevos: Lead[]
+  reintentar: Lead[]
+  totals: { seguimiento: number; nuevos: number; reintentar: number }
+}
+
+export interface CallMetrics {
+  total_calls: number
+  calls_last_7d: number
+  conversations: number
+  appointments: number
+  by_disposition: Partial<Record<Disposition, number>>
+  connect_rate: number
+  conversation_to_appt: number
+  calls_per_appointment: number | null
+  total_minutes: number
+  total_cost_usd: number
+  cost_per_appointment: number | null
+}
+
+export type SortMode = 'recent' | 'quality' | 'rating' | 'reviews'
+
+export const SORT_LABEL: Record<SortMode, string> = {
+  recent:  'Más recientes',
+  quality: 'Mejores (rating + reseñas)',
+  rating:  'Mejor calificados',
+  reviews: 'Más reseñas',
+}
+
+/** Bayesian score: prioriza buenos ratings respaldados por suficientes reseñas. */
+function qualityScore(rating: number | null | undefined, reviews: number | null | undefined): number {
+  const r = rating ?? 0
+  const n = reviews ?? 0
+  const m = 4.0   // rating promedio asumido
+  const C = 10    // peso de la prior
+  return (r * n + m * C) / (n + C)
+}
+
+export function sortLeads<T extends { rating: number | null; reviews_count: number | null; scraped_at: string }>(
+  leads: T[],
+  mode: SortMode,
+): T[] {
+  const arr = [...leads]
+  switch (mode) {
+    case 'quality':
+      arr.sort((a, b) => qualityScore(b.rating, b.reviews_count) - qualityScore(a.rating, a.reviews_count))
+      break
+    case 'rating':
+      arr.sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1) || (b.reviews_count ?? 0) - (a.reviews_count ?? 0))
+      break
+    case 'reviews':
+      arr.sort((a, b) => (b.reviews_count ?? 0) - (a.reviews_count ?? 0) || (b.rating ?? 0) - (a.rating ?? 0))
+      break
+    case 'recent':
+    default:
+      arr.sort((a, b) => (b.scraped_at || '').localeCompare(a.scraped_at || ''))
+  }
+  return arr
 }
 
 export interface SSEEvent {
@@ -22,4 +167,44 @@ export interface SSEEvent {
   index?: number
   new?: number
   skipped?: number
+}
+
+export interface Seller {
+  id: string
+  email: string
+  full_name: string | null
+  role: 'admin' | 'vendedor'
+  active: boolean
+  created_at: string
+  zones: string[]
+}
+
+export interface AdminStats {
+  overview: {
+    total: number
+    with_email: number
+    without_email: number
+    email_rate: number
+    by_status: Partial<Record<LeadStatus, number>>
+    scraped_last_7d: number
+    scraped_last_30d: number
+  }
+  top_zones:      { zone: string;     count: number }[]
+  top_categories: { category: string; count: number }[]
+  top_queries:    { query: string;    count: number }[]
+  activity_30d:   { date: string;     count: number }[]
+  sellers: {
+    id: string
+    email: string
+    full_name: string | null
+    active: boolean
+    zones: string[]
+    total_assigned: number
+    by_status: Record<LeadStatus, number>
+    with_email: number
+    updates_7d: number
+    updates_30d: number
+    contact_rate: number
+    win_rate: number
+  }[]
 }
