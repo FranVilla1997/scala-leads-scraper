@@ -353,7 +353,7 @@ async def people_from_linkedin(business_name: str, max_people: int = 3) -> list[
         namesake = bool(_name_tokens(parts[0]) & set(distinctive))
         # Solo perfiles con el negocio en el titular: los que apenas lo mencionan en el
         # extracto traían gente de otras empresas
-        if not (norm_company in norm_title or all(t in norm_title for t in distinctive) or namesake):
+        if not (norm_company in norm_title or namesake):
             continue
         out.append(_contact(
             "linkedin_serp", "media",

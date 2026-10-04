@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Download, Mail, Phone, Globe, Star, Search,
   RefreshCw, ExternalLink, Database, X, ChevronDown, Check, Loader2, ArrowUpDown,
-  PhoneCall, PhoneOff, MessageCircle,
+  PhoneCall, PhoneOff, MessageCircle, UserSearch, Linkedin,
 } from 'lucide-react'
 import { apiFetch, apiJson } from '../lib/api'
 import type { Lead, LeadStatus, Seller, SortMode } from '../types'
@@ -102,6 +102,7 @@ export default function LeadsDB() {
   const [selectedSellers, setSelectedSellers] = useState<string[]>([])
   const [selectedCategories, setSelectedCategories] = useState<string[]>([])
   const [emailFilter, setEmailFilter] = useState<'all' | 'with' | 'without'>('all')
+  const [contactFilter, setContactFilter] = useState<'all' | 'with' | 'pending'>('all')
 
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
@@ -169,10 +170,10 @@ export default function LeadsDB() {
 
   const toggle = <T,>(setter: React.Dispatch<React.SetStateAction<T[]>>) => (v: T) => setter(p => p.includes(v) ? p.filter(x => x !== v) : [...p, v])
 
-  const hasFilters = textFilter || selectedZones.length || selectedKeywords.length || selectedStatuses.length || selectedSellers.length || selectedCategories.length || emailFilter !== 'all'
+  const hasFilters = textFilter || selectedZones.length || selectedKeywords.length || selectedStatuses.length || selectedSellers.length || selectedCategories.length || emailFilter !== 'all' || contactFilter !== 'all'
   const clearAll = () => {
     setTextFilter(''); setSelectedZones([]); setSelectedKeywords([])
-    setSelectedStatuses([]); setSelectedSellers([]); setSelectedCategories([]); setEmailFilter('all')
+    setSelectedStatuses([]); setSelectedSellers([]); setSelectedCategories([]); setEmailFilter('all'); setContactFilter('all')
   }
 
   const filtered = useMemo(() => leads.filter(l => {
@@ -193,11 +194,13 @@ export default function LeadsDB() {
     }
     if (emailFilter === 'with' && !l.email) return false
     if (emailFilter === 'without' && l.email) return false
+    if (contactFilter === 'with' && !l.main_contact?.full_name) return false
+    if (contactFilter === 'pending' && l.enriched_at) return false
     return true
-  }), [leads, textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedCategories, selectedSellers, emailFilter, zoneToSellers])
+  }), [leads, textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedCategories, selectedSellers, emailFilter, contactFilter, zoneToSellers])
 
   // Reset page cuando cambian filtros u orden
-  useEffect(() => { setPage(1) }, [textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedCategories, selectedSellers, emailFilter, pageSize, sortBy])
+  useEffect(() => { setPage(1) }, [textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedCategories, selectedSellers, emailFilter, contactFilter, pageSize, sortBy])
 
   const sorted = useMemo(() => sortLeads(filtered, sortBy), [filtered, sortBy])
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
@@ -218,10 +221,55 @@ export default function LeadsDB() {
     } finally { setSavingId(null) }
   }
 
+  // ── Buscar responsables ────────────────────────────────────────────────────
+  const ENRICH_BATCH = 10
+  const [enrichProgress, setEnrichProgress] = useState<{ done: number; total: number } | null>(null)
+  const [enrichingIds, setEnrichingIds] = useState<Set<string>>(new Set())
+  const cancelEnrichRef = useRef(false)
+
+  type EnrichResult = Pick<Lead, 'place_id' | 'enriched_at' | 'main_contact' | 'contacts_count'>
+
+  const enrichBatch = async (ids: string[]) => {
+    setEnrichingIds(prev => new Set([...prev, ...ids]))
+    try {
+      const results = await apiJson<EnrichResult[]>('/api/leads/enrich', {
+        method: 'POST', body: JSON.stringify({ place_ids: ids }),
+      })
+      const byId = new Map(results.map(r => [r.place_id, r]))
+      setLeads(prev => prev.map(l => byId.has(l.place_id) ? { ...l, ...byId.get(l.place_id)! } : l))
+    } finally {
+      setEnrichingIds(prev => { const next = new Set(prev); ids.forEach(id => next.delete(id)); return next })
+    }
+  }
+
+  // Los filtrados a los que todavía no se les buscó responsable
+  const pendingEnrich = useMemo(() => sorted.filter(l => !l.enriched_at), [sorted])
+
+  const enrichFiltered = async () => {
+    const ids = pendingEnrich.map(l => l.place_id)
+    if (ids.length === 0) return
+    if (ids.length > 50 && !window.confirm(
+      `Vas a buscar responsables de ${ids.length} leads (web + LinkedIn). Puede tardar varios minutos y usa una búsqueda paga por lead. ¿Seguir?`
+    )) return
+
+    cancelEnrichRef.current = false
+    setEnrichProgress({ done: 0, total: ids.length })
+    for (let i = 0; i < ids.length && !cancelEnrichRef.current; i += ENRICH_BATCH) {
+      try { await enrichBatch(ids.slice(i, i + ENRICH_BATCH)) } catch { /* sigue con el próximo lote */ }
+      setEnrichProgress({ done: Math.min(i + ENRICH_BATCH, ids.length), total: ids.length })
+    }
+    setEnrichProgress(null)
+  }
+
   const exportCSV = () => {
     const fields: (keyof Lead)[] = ['name','address','phone','website','email','status','rating','reviews_count','category','search_query','search_zone','notes']
     const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
-    const csv = [fields.join(','), ...sorted.map(l => fields.map(f => esc(l[f])).join(','))].join('\n')
+    const contactCols = ['responsable', 'responsable_cargo', 'responsable_email', 'responsable_linkedin']
+    const contactOf = (l: Lead) => [l.main_contact?.full_name, l.main_contact?.role, l.main_contact?.email, l.main_contact?.linkedin_url]
+    const csv = [
+      [...fields, ...contactCols].join(','),
+      ...sorted.map(l => [...fields.map(f => l[f]), ...contactOf(l)].map(esc).join(',')),
+    ].join('\n')
     const a = Object.assign(document.createElement('a'), {
       href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })),
       download: `leads_${new Date().toISOString().slice(0, 10)}.csv`,
@@ -233,10 +281,11 @@ export default function LeadsDB() {
     <div className="space-y-4">
 
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
         {[
           { label: 'Total leads', value: leads.length, color: 'text-scala-text-primary' },
           { label: 'Con email', value: leads.filter(l => l.email).length, color: 'text-scala-green' },
+          { label: 'Con responsable', value: leads.filter(l => l.main_contact?.full_name).length, color: 'text-scala-green' },
           { label: 'Zonas', value: zoneOptions.length, color: 'text-scala-blue-light' },
           { label: 'Vendedores', value: sellerOptions.length, color: 'text-scala-blue-light' },
           { label: 'Sin contactar', value: leads.filter(l => l.status === 'nuevo').length, color: 'text-yellow-300' },
@@ -293,6 +342,18 @@ export default function LeadsDB() {
           ))}
         </div>
 
+        <div className="flex rounded-lg border border-white/[0.07] overflow-hidden text-xs">
+          {(['all', 'with', 'pending'] as const).map(v => (
+            <button
+              key={v}
+              onClick={() => setContactFilter(v)}
+              className={`px-3 py-2 transition-colors ${contactFilter === v ? 'bg-scala-blue text-white' : 'bg-scala-surface2 text-scala-text-muted hover:text-scala-text-primary'}`}
+            >
+              {v === 'all' ? 'Todos' : v === 'with' ? 'Con responsable' : 'Sin buscar'}
+            </button>
+          ))}
+        </div>
+
         <div className="flex items-center gap-1.5">
           <ArrowUpDown size={13} className="text-scala-text-subtle" />
           <select
@@ -315,6 +376,23 @@ export default function LeadsDB() {
           <button onClick={load} disabled={loading} className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-white/[0.07] bg-scala-surface2 text-xs text-scala-text-muted hover:text-scala-text-primary transition-colors disabled:opacity-40">
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           </button>
+          {enrichProgress ? (
+            <button onClick={() => { cancelEnrichRef.current = true }}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-scala-green/40 bg-scala-green/10 text-xs font-medium text-scala-green hover:border-red-400/40 hover:text-red-300 transition-colors"
+                    title="Frenar la búsqueda">
+              <Loader2 size={13} className="animate-spin" />
+              Buscando responsables {enrichProgress.done}/{enrichProgress.total} · Frenar
+            </button>
+          ) : (
+            <button onClick={enrichFiltered} disabled={pendingEnrich.length === 0}
+                    title={pendingEnrich.length === 0
+                      ? 'Ya se buscaron los responsables de todos los leads filtrados'
+                      : 'Busca dueño / gerente de cada lead filtrado en su web y en LinkedIn'}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-scala-green/40 bg-scala-green/10 text-xs font-medium text-scala-green hover:bg-scala-green hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+              <UserSearch size={13} />
+              Buscar responsables ({pendingEnrich.length})
+            </button>
+          )}
           <button onClick={exportCSV} disabled={filtered.length === 0} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-scala-blue hover:bg-scala-blue-light text-white text-xs font-medium transition-colors disabled:opacity-40">
             <Download size={13} />
             Exportar ({filtered.length})
@@ -369,7 +447,7 @@ export default function LeadsDB() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/[0.07]">
-                {['', 'Negocio', 'Zona', 'Vendedor', 'Contacto', 'Estado', 'Web', 'Rating'].map(col => (
+                {['', 'Negocio', 'Responsable', 'Zona', 'Vendedor', 'Contacto', 'Estado', 'Web', 'Rating'].map(col => (
                   <th key={col} className="px-4 py-3 text-left text-xs font-medium text-scala-text-muted uppercase tracking-wider whitespace-nowrap">{col}</th>
                 ))}
               </tr>
@@ -377,7 +455,7 @@ export default function LeadsDB() {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-16 text-center">
+                  <td colSpan={9} className="py-16 text-center">
                     <Database size={28} className="mx-auto mb-3 text-scala-text-subtle opacity-30" />
                     <p className="text-scala-text-muted text-sm">
                       {leads.length === 0 ? 'No hay leads guardados todavía' : 'Sin resultados para los filtros aplicados'}
@@ -408,6 +486,29 @@ export default function LeadsDB() {
                       <p className="font-medium text-scala-text-primary text-sm leading-tight">{lead.name || '—'}</p>
                       {lead.search_query && <p className="text-xs text-scala-text-subtle mt-0.5">"{lead.search_query}"</p>}
                       {lead.notes && <p className="text-xs text-scala-text-muted mt-1 italic max-w-[260px] truncate">{lead.notes}</p>}
+                    </td>
+                    <td className="px-4 py-3 max-w-[220px]">
+                      {enrichingIds.has(lead.place_id) ? (
+                        <span className="flex items-center gap-1.5 text-xs text-scala-text-muted"><Loader2 size={12} className="animate-spin" />Buscando...</span>
+                      ) : lead.main_contact ? (
+                        <button onClick={() => setCallingLead(lead)} className="text-left max-w-full" title="Ver todos los contactos">
+                          <p className={`text-xs font-medium truncate ${lead.main_contact.is_decision_maker ? 'text-scala-green' : 'text-scala-text-primary'}`}>
+                            {lead.main_contact.full_name ?? lead.main_contact.email}
+                          </p>
+                          <p className="flex items-center gap-1.5 text-[11px] text-scala-text-subtle">
+                            {lead.main_contact.linkedin_url && <Linkedin size={10} className="shrink-0 text-scala-blue-light" />}
+                            <span className="truncate">{lead.main_contact.role ?? (lead.main_contact.full_name ? 'sin cargo' : 'email directo')}</span>
+                            {(lead.contacts_count ?? 0) > 1 && <span className="shrink-0">+{(lead.contacts_count ?? 1) - 1}</span>}
+                          </p>
+                        </button>
+                      ) : lead.enriched_at ? (
+                        <span className="text-xs text-scala-text-subtle">No encontrado</span>
+                      ) : (
+                        <button onClick={() => enrichBatch([lead.place_id]).catch(() => {})}
+                                className="flex items-center gap-1 px-2 py-1 rounded-lg border border-white/10 text-[11px] text-scala-text-muted hover:text-scala-green hover:border-scala-green/40 transition-colors">
+                          <UserSearch size={11} /> Buscar
+                        </button>
+                      )}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <span className="px-2 py-0.5 rounded-full text-xs bg-scala-blue/10 text-scala-blue-light border border-scala-blue/20">{lead.search_zone || '—'}</span>

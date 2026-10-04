@@ -16,14 +16,14 @@ from config import FRONTEND_URL, SCRAPER_CONCURRENCY
 from db import (
     create_call, create_seller, get_all_leads, get_all_zone_assignments,
     download_recording, get_call, get_call_metrics, get_call_queue, get_existing_emails,
-    get_lead, list_calls_pending_transcript, list_contacts, list_leads_pending_enrichment,
+    get_lead, get_leads_by_ids, get_main_contacts, list_calls_pending_transcript, list_contacts, list_leads_pending_enrichment,
     get_seller_zones, list_calls, list_distinct_zones, list_sellers, save_enrichment,
     set_do_not_call, set_seller_active, set_seller_zones, sign_recording, update_call,
     update_lead_status, upload_recording, upsert_lead,
 )
 from enrich import find_contacts
 from places import search_places
-from scraper import EmailScraper
+from scraper import EmailScraper, SiteData
 from transcribe import TranscriptionUnavailable, process_recording
 
 app = FastAPI(title="Scala Leads Scraper")
@@ -328,7 +328,11 @@ def _visible_zones(user: CurrentUser) -> list[str] | None:
 @app.get("/api/leads")
 async def get_leads(user: CurrentUser = Depends(require_user)):
     zones = _visible_zones(user)
-    return get_all_leads(zones=zones)
+    leads = get_all_leads(zones=zones)
+    contacts = get_main_contacts()
+    for l in leads:
+        l.update(contacts.get(l["place_id"]) or {"main_contact": None, "contacts_count": 0})
+    return leads
 
 
 @app.patch("/api/leads/{place_id}/status")
@@ -382,8 +386,8 @@ def _assert_lead_visible(place_id: str, user: CurrentUser) -> None:
 # ── Responsables / tomadores de decisión ─────────────────────────────────────
 
 async def _enrich_lead(scraper: EmailScraper, lead: dict) -> list[dict]:
-    """Busca responsables en la web del lead y los guarda."""
-    site = await scraper.extract_site(lead["website"])
+    """Busca responsables del lead (web + LinkedIn) y los guarda."""
+    site = await scraper.extract_site(lead["website"]) if lead.get("website") else SiteData()
     contacts = await find_contacts(lead.get("name") or "", site)
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(
@@ -401,13 +405,11 @@ async def get_contacts(place_id: str, user: CurrentUser = Depends(require_user))
 
 @app.post("/api/leads/{place_id}/enrich")
 async def post_enrich(place_id: str, user: CurrentUser = Depends(require_user)):
-    """Busca (o vuelve a buscar) los responsables de un lead en su sitio web."""
+    """Busca (o vuelve a buscar) los responsables de un lead."""
     _assert_lead_visible(place_id, user)
     lead = get_lead(place_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead no encontrado")
-    if not lead.get("website"):
-        raise HTTPException(status_code=400, detail="El lead no tiene sitio web")
 
     scraper = EmailScraper(concurrency=1)
     try:
@@ -415,6 +417,34 @@ async def post_enrich(place_id: str, user: CurrentUser = Depends(require_user)):
     finally:
         await scraper.close()
     return list_contacts(place_id)
+
+
+class EnrichManyPayload(BaseModel):
+    place_ids: list[str]
+
+
+@app.post("/api/leads/enrich")
+async def post_enrich_many(body: EnrichManyPayload, user: CurrentUser = Depends(require_user)):
+    """Busca responsables para un lote de leads (la UI manda de a pocos y muestra progreso)."""
+    leads = get_leads_by_ids(body.place_ids[:25])
+    zones = _visible_zones(user)
+    if zones is not None:
+        leads = [l for l in leads if l.get("search_zone") in zones]
+
+    scraper = EmailScraper(concurrency=SCRAPER_CONCURRENCY)
+    try:
+        await asyncio.gather(*(_enrich_lead(scraper, l) for l in leads), return_exceptions=True)
+    finally:
+        await scraper.close()
+
+    ids = [l["place_id"] for l in leads]
+    contacts = get_main_contacts(ids)
+    now = datetime.now(timezone.utc).isoformat()
+    return [
+        {"place_id": pid, "enriched_at": now,
+         **(contacts.get(pid) or {"main_contact": None, "contacts_count": 0})}
+        for pid in ids
+    ]
 
 
 @app.post("/api/admin/enrich-pending")

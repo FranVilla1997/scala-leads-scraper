@@ -95,9 +95,9 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
         `/api/leads/${encodeURIComponent(lead.place_id)}/enrich`, { method: 'POST' },
       )
       setContacts(found)
-      if (found.length === 0) setEnrichMsg('La web no nombra a ningún responsable.')
+      if (found.length === 0) setEnrichMsg('No apareció ningún responsable en la web ni en LinkedIn.')
     } catch {
-      setEnrichMsg('No se pudo revisar la web.')
+      setEnrichMsg('No se pudo hacer la búsqueda.')
     } finally {
       setEnriching(false)
     }
@@ -342,17 +342,17 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
           </div>
 
           {/* Responsables: por quién preguntar */}
-          {(contacts.length > 0 || lead.website) && (
+          {(
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs uppercase tracking-widest text-scala-text-muted">
                   Por quién preguntar
                 </label>
-                {lead.website && (
+                {(
                   <button onClick={findContacts} disabled={enriching}
                           className="flex items-center gap-1.5 text-xs text-scala-text-muted hover:text-scala-text-primary disabled:opacity-50">
                     {enriching
-                      ? <><Loader2 size={12} className="animate-spin" /> Revisando la web...</>
+                      ? <><Loader2 size={12} className="animate-spin" /> Buscando...</>
                       : <><UserSearch size={12} /> {contacts.length ? 'Volver a buscar' : 'Buscar responsables'}</>}
                   </button>
                 )}

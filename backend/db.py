@@ -109,6 +109,43 @@ def list_contacts(place_id: str) -> list[dict]:
         return []
 
 
+def get_leads_by_ids(place_ids: list[str]) -> list[dict]:
+    try:
+        if not place_ids:
+            return []
+        res = get_client().table("scraping_leads").select("*").in_("place_id", place_ids).execute()
+        return res.data or []
+    except Exception as e:
+        print(f"[db] get_leads_by_ids error: {e}")
+        return []
+
+
+def get_main_contacts(place_ids: list[str] | None = None) -> dict[str, dict]:
+    """{place_id: {"main_contact": mejor contacto, "contacts_count": n}}.
+    El mejor es el decisor con nombre; si no hay, la primera persona con nombre."""
+    try:
+        fields = "place_id, full_name, role, email, linkedin_url, is_decision_maker, confidence"
+        def build(a: int, b: int):
+            q = get_client().table("lead_contacts").select(fields).order("created_at", desc=False)
+            if place_ids is not None:
+                q = q.in_("place_id", place_ids)
+            return q.range(a, b)
+        if place_ids is not None and not place_ids:
+            return {}
+        out: dict[str, dict] = {}
+        for c in _paginate(build):
+            pid = c.pop("place_id")
+            entry = out.setdefault(pid, {"main_contact": c, "contacts_count": 0})
+            entry["contacts_count"] += 1
+            rank = lambda x: (bool(x["is_decision_maker"] and x["full_name"]), bool(x["full_name"]))
+            if rank(c) > rank(entry["main_contact"]):
+                entry["main_contact"] = c
+        return out
+    except Exception as e:
+        print(f"[db] get_main_contacts error: {e}")
+        return {}
+
+
 def save_enrichment(place_id: str, contacts: list[dict], socials: dict | None = None,
                     email: str | None = None) -> None:
     """Guarda el resultado de buscar responsables. Reemplaza los contactos

@@ -41,6 +41,9 @@ export interface Lead {
   next_action_at?: string | null
   socials?: Partial<Record<'linkedin' | 'instagram' | 'facebook' | 'whatsapp', string>> | null
   enriched_at?: string | null
+  /** Mejor contacto encontrado (decisor con nombre si hay) — lo arma /api/leads */
+  main_contact?: Pick<LeadContact, 'full_name' | 'role' | 'email' | 'linkedin_url' | 'is_decision_maker' | 'confidence'> | null
+  contacts_count?: number
 }
 
 /* ── Responsables ─────────────────────────────────────────────────────────── */
