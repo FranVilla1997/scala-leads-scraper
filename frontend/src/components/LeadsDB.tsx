@@ -136,38 +136,6 @@ export default function LeadsDB() {
     return m
   }, [sellers])
 
-  const zoneOptions = useMemo(() => (
-    Array.from(leads.reduce((m, l) => { if (l.search_zone) m.set(l.search_zone, (m.get(l.search_zone) || 0) + 1); return m }, new Map<string, number>()))
-      .map(([value, count]) => ({ value, count }))
-      .sort((a, b) => a.value.localeCompare(b.value))
-  ), [leads])
-
-  const keywordOptions = useMemo(() => (
-    Array.from(leads.reduce((m, l) => { if (l.search_query) m.set(l.search_query, (m.get(l.search_query) || 0) + 1); return m }, new Map<string, number>()))
-      .map(([value, count]) => ({ value, count }))
-      .sort((a, b) => b.count - a.count)
-  ), [leads])
-
-  // Categorías de Google Places (campo `category`). Cada lead puede tener N tipos separados por ", ".
-  const categoryOptions = useMemo(() => {
-    const m = new Map<string, number>()
-    leads.forEach(l => {
-      if (!l.category) return
-      l.category.split(',').map(c => c.trim()).filter(Boolean).forEach(cat => {
-        m.set(cat, (m.get(cat) || 0) + 1)
-      })
-    })
-    return Array.from(m).map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count)
-  }, [leads])
-
-  const sellerOptions = useMemo(() => (
-    sellers.filter(s => s.role === 'vendedor').map(s => ({
-      value: s.id,
-      label: s.full_name || s.email,
-      count: leads.filter(l => (zoneToSellers.get(l.search_zone) ?? []).some(x => x.id === s.id)).length,
-    }))
-  ), [sellers, leads, zoneToSellers])
-
   const toggle = <T,>(setter: React.Dispatch<React.SetStateAction<T[]>>) => (v: T) => setter(p => p.includes(v) ? p.filter(x => x !== v) : [...p, v])
 
   const hasFilters = textFilter || selectedZones.length || selectedKeywords.length || selectedStatuses.length || selectedSellers.length || selectedCategories.length || emailFilter !== 'all' || contactFilter !== 'all'
@@ -176,19 +144,23 @@ export default function LeadsDB() {
     setSelectedStatuses([]); setSelectedSellers([]); setSelectedCategories([]); setEmailFilter('all'); setContactFilter('all')
   }
 
-  const filtered = useMemo(() => leads.filter(l => {
+  type Facet = 'zone' | 'keyword' | 'status' | 'category' | 'seller'
+
+  /** ¿El lead pasa los filtros activos? `skip` deja afuera un filtro: así las opciones de
+   *  cada desplegable se cuentan sobre lo que dejan pasar los DEMÁS filtros. */
+  const matches = useCallback((l: Lead, skip?: Facet) => {
     if (textFilter) {
       const q = textFilter.toLowerCase()
       if (![l.name, l.address, l.email, l.category, l.notes].some(v => v?.toLowerCase().includes(q))) return false
     }
-    if (selectedZones.length && !selectedZones.includes(l.search_zone)) return false
-    if (selectedKeywords.length && !selectedKeywords.includes(l.search_query)) return false
-    if (selectedStatuses.length && !selectedStatuses.includes(l.status)) return false
-    if (selectedCategories.length) {
+    if (skip !== 'zone' && selectedZones.length && !selectedZones.includes(l.search_zone)) return false
+    if (skip !== 'keyword' && selectedKeywords.length && !selectedKeywords.includes(l.search_query)) return false
+    if (skip !== 'status' && selectedStatuses.length && !selectedStatuses.includes(l.status)) return false
+    if (skip !== 'category' && selectedCategories.length) {
       const leadCats = (l.category || '').split(',').map(c => c.trim()).filter(Boolean)
       if (!leadCats.some(c => selectedCategories.includes(c))) return false
     }
-    if (selectedSellers.length) {
+    if (skip !== 'seller' && selectedSellers.length) {
       const owners = (zoneToSellers.get(l.search_zone) ?? []).map(s => s.id)
       if (!owners.some(id => selectedSellers.includes(id))) return false
     }
@@ -197,7 +169,50 @@ export default function LeadsDB() {
     if (contactFilter === 'with' && !l.main_contact?.full_name) return false
     if (contactFilter === 'pending' && l.enriched_at) return false
     return true
-  }), [leads, textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedCategories, selectedSellers, emailFilter, contactFilter, zoneToSellers])
+  }, [textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedCategories, selectedSellers, emailFilter, contactFilter, zoneToSellers])
+
+  const filtered = useMemo(() => leads.filter(l => matches(l)), [leads, matches])
+
+  /** Opciones de un desplegable: solo valores que existen con los demás filtros puestos
+   *  (más los ya tildados, para poder destildarlos aunque queden en 0). */
+  const facetOptions = useCallback((facet: Facet, valuesOf: (l: Lead) => string[], selected: string[]) => {
+    const m = new Map<string, number>(selected.map(v => [v, 0]))
+    leads.forEach(l => {
+      if (!matches(l, facet)) return
+      valuesOf(l).forEach(v => { if (v) m.set(v, (m.get(v) || 0) + 1) })
+    })
+    return Array.from(m).map(([value, count]) => ({ value, count }))
+  }, [leads, matches])
+
+  const zoneOptions = useMemo(() => (
+    facetOptions('zone', l => [l.search_zone], selectedZones).sort((a, b) => a.value.localeCompare(b.value))
+  ), [facetOptions, selectedZones])
+
+  const keywordOptions = useMemo(() => (
+    facetOptions('keyword', l => [l.search_query], selectedKeywords).sort((a, b) => b.count - a.count)
+  ), [facetOptions, selectedKeywords])
+
+  // Categorías de Google Places (campo `category`). Cada lead puede tener N tipos separados por ", ".
+  const categoryOptions = useMemo(() => (
+    facetOptions('category', l => (l.category || '').split(',').map(c => c.trim()), selectedCategories)
+      .sort((a, b) => b.count - a.count)
+  ), [facetOptions, selectedCategories])
+
+  const statusOptions = useMemo(() => {
+    const counts = new Map(facetOptions('status', l => [l.status], []).map(o => [o.value, o.count]))
+    return STATUS_ORDER.map(s => ({ value: s as string, count: counts.get(s) ?? 0 }))
+  }, [facetOptions])
+
+  const sellerOptions = useMemo(() => {
+    const counts = new Map(
+      facetOptions('seller', l => (zoneToSellers.get(l.search_zone) ?? []).map(s => s.id), []).map(o => [o.value, o.count]),
+    )
+    return sellers.filter(s => s.role === 'vendedor').map(s => ({
+      value: s.id,
+      label: s.full_name || s.email,
+      count: counts.get(s.id) ?? 0,
+    }))
+  }, [sellers, facetOptions, zoneToSellers])
 
   // Reset page cuando cambian filtros u orden
   useEffect(() => { setPage(1) }, [textFilter, selectedZones, selectedKeywords, selectedStatuses, selectedCategories, selectedSellers, emailFilter, contactFilter, pageSize, sortBy])
@@ -286,7 +301,7 @@ export default function LeadsDB() {
           { label: 'Total leads', value: leads.length, color: 'text-scala-text-primary' },
           { label: 'Con email', value: leads.filter(l => l.email).length, color: 'text-scala-green' },
           { label: 'Con responsable', value: leads.filter(l => l.main_contact?.full_name).length, color: 'text-scala-green' },
-          { label: 'Zonas', value: zoneOptions.length, color: 'text-scala-blue-light' },
+          { label: 'Zonas', value: new Set(leads.map(l => l.search_zone).filter(Boolean)).size, color: 'text-scala-blue-light' },
           { label: 'Vendedores', value: sellerOptions.length, color: 'text-scala-blue-light' },
           { label: 'Sin contactar', value: leads.filter(l => l.status === 'nuevo').length, color: 'text-yellow-300' },
         ].map(s => (
@@ -317,7 +332,7 @@ export default function LeadsDB() {
         <MultiSelect label="Tipo de negocio" options={categoryOptions} selected={selectedCategories} onToggle={toggle(setSelectedCategories)} />
         <MultiSelect
           label="Estado"
-          options={STATUS_ORDER.map(s => ({ value: s, count: leads.filter(l => l.status === s).length }))}
+          options={statusOptions}
           selected={selectedStatuses}
           onToggle={toggle(setSelectedStatuses) as (v: string) => void}
         />

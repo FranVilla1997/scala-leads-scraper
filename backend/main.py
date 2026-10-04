@@ -2,6 +2,7 @@ import asyncio
 import csv
 import io
 import json
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import AsyncIterator, Literal
@@ -51,6 +52,15 @@ class JobState:
 
 
 jobs: dict[str, JobState] = {}
+
+
+def normalize_tag(value: str) -> str:
+    """Forma única para guardar zonas y keywords: minúsculas, sin tildes ni espacios
+    de más (la ñ se conserva). Evita que 'Argentina' y 'argentina' queden como dos
+    zonas distintas."""
+    value = unicodedata.normalize("NFKD", (value or "").lower().replace("ñ", "\0"))
+    value = "".join(c for c in value if not unicodedata.combining(c)).replace("\0", "ñ")
+    return " ".join(value.split())
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -166,8 +176,8 @@ async def run_search(job_id: str, queries: list[str], zones: list[str], max_resu
             for p in places:
                 pid = p.get("place_id")
                 if pid and pid not in all_places:
-                    p["search_zone"] = zone
-                    p["search_query"] = query  # tag con la query que lo encontró primero
+                    p["search_zone"] = normalize_tag(zone)
+                    p["search_query"] = normalize_tag(query)  # tag con la query que lo encontró primero
                     all_places[pid] = p
 
         places_list = list(all_places.values())
@@ -204,8 +214,8 @@ async def run_search(job_id: str, queries: list[str], zones: list[str], max_resu
                 "rating": place.get("rating"),
                 "reviews_count": place.get("user_ratings_total"),
                 "category": ", ".join(types[:2]),
-                "search_query": place.get("search_query", queries[0]),
-                "search_zone": place.get("search_zone", zones[0]),
+                "search_query": place.get("search_query", normalize_tag(queries[0])),
+                "search_zone": place.get("search_zone", normalize_tag(zones[0])),
                 "scraped_at": datetime.now(timezone.utc).isoformat(),
                 "email": None,
             }
@@ -701,7 +711,7 @@ async def post_seller(body: CreateSellerPayload, _: CurrentUser = Depends(requir
 
 @app.put("/api/admin/sellers/{user_id}/zones")
 async def put_seller_zones(user_id: str, body: SellerZonesPayload, _: CurrentUser = Depends(require_admin)):
-    set_seller_zones(user_id, [z.strip() for z in body.zones if z.strip()])
+    set_seller_zones(user_id, list(dict.fromkeys(normalize_tag(z) for z in body.zones if z.strip())))
     return {"ok": True, "zones": get_seller_zones(user_id)}
 
 
