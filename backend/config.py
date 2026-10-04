@@ -17,3 +17,6 @@ OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")
 WHISPER_MODEL   = os.getenv("WHISPER_MODEL", "whisper-1")
 ANALYSIS_MODEL  = os.getenv("ANALYSIS_MODEL", "gpt-4o-mini")
 RECORDINGS_BUCKET = os.getenv("RECORDINGS_BUCKET", "call-recordings")
+
+# Búsqueda de responsables en LinkedIn vía Google (serper.dev)
+SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
