@@ -73,6 +73,14 @@ Migraciones en `backend/migrations/` — **ya ejecutadas** en el proyecto:
   `call_count`, `next_action_at`), trigger que sincroniza el lead con cada llamada insertada,
   bucket privado Storage `call-recordings`.
 
+- OJO: en el dashboard de Supabase el proyecto `txqtysahvgxbpkjdrukt` figura con el nombre
+  **"Scala Project Tracker"** (no "sentinel_", que es otro proyecto sin datos de esta app).
+- `003_contacts.sql` (ya ejecutada, oct 2026): tabla `lead_contacts` (responsables por lead, con
+  `source` y `confidence`) + columnas `socials` y `enriched_at` en leads. La llena `backend/enrich.py`
+  (JSON-LD + LLM sobre la web del negocio + emails no genéricos). Endpoints: `GET /api/leads/{id}/contacts`,
+  `POST /api/leads/{id}/enrich`, `POST /api/admin/enrich-pending?limit=50` (backfill, devuelve tasas).
+  NIC.ar WHOIS se descartó: sus términos prohíben usar los datos para otra cosa que operaciones de dominios.
+
 **Auth:** Supabase Auth (email+password). El backend valida JWT (ES256 vía JWKS con fallback HS256, leeway 60s).
 Roles: `admin` (Franco, franco@scala.com) ve todo + tabs Scraper/Dashboard/Vendedores; `vendedor` solo ve
 leads de sus zonas asignadas. Los vendedores se crean desde la UI (tab Vendedores) — usa la Admin API de Supabase.

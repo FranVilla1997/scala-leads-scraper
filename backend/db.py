@@ -83,6 +83,71 @@ def update_lead_status(place_id: str, status: str, user_id: str, notes: str | No
         return None
 
 
+# ── Contactos / responsables ─────────────────────────────────────────────────
+
+def get_lead(place_id: str) -> dict | None:
+    try:
+        res = get_client().table("scraping_leads").select("*").eq("place_id", place_id).limit(1).execute()
+        return (res.data or [None])[0]
+    except Exception as e:
+        print(f"[db] get_lead error: {e}")
+        return None
+
+
+def list_contacts(place_id: str) -> list[dict]:
+    try:
+        res = (
+            get_client().table("lead_contacts").select("*")
+            .eq("place_id", place_id)
+            .order("is_decision_maker", desc=True)
+            .order("created_at", desc=False)
+            .execute()
+        )
+        return res.data or []
+    except Exception as e:
+        print(f"[db] list_contacts error: {e}")
+        return []
+
+
+def save_enrichment(place_id: str, contacts: list[dict], socials: dict | None = None,
+                    email: str | None = None) -> None:
+    """Guarda el resultado de buscar responsables. Reemplaza los contactos
+    automáticos anteriores (los `manual` no se tocan) y marca el lead."""
+    try:
+        client = get_client()
+        if contacts:
+            client.table("lead_contacts").delete().eq("place_id", place_id).neq("source", "manual").execute()
+            client.table("lead_contacts").insert(
+                [{**c, "place_id": place_id} for c in contacts]
+            ).execute()
+
+        patch: dict = {"enriched_at": datetime.now(timezone.utc).isoformat()}
+        if socials:
+            patch["socials"] = socials
+        if email:
+            patch["email"] = email
+        client.table("scraping_leads").update(patch).eq("place_id", place_id).execute()
+    except Exception as e:
+        print(f"[db] save_enrichment error for {place_id}: {e}")
+
+
+def list_leads_pending_enrichment(limit: int = 50) -> list[dict]:
+    """Leads con web a los que todavía no se les buscó responsables."""
+    try:
+        res = (
+            get_client().table("scraping_leads").select("place_id, name, website, email")
+            .neq("website", "")
+            .is_("enriched_at", "null")
+            .order("scraped_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return [r for r in (res.data or []) if r.get("website")]
+    except Exception as e:
+        print(f"[db] list_leads_pending_enrichment error: {e}")
+        return []
+
+
 # ── Users / profiles ─────────────────────────────────────────────────────────
 
 def get_user_profile(user_id: str) -> dict | None:

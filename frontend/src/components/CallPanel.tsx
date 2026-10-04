@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   X, Phone, Star, Globe, ExternalLink, Mic, Square, Loader2, Save,
   AlertCircle, CheckCircle2, MapPin, Mail, History, Trash2, Upload, MessageCircle,
+  UserSearch, Linkedin, Instagram,
 } from 'lucide-react'
 import { API, apiFetch, apiJson, getAccessToken } from '../lib/api'
 import { waLink, WA_DEFAULT_TEXT } from '../lib/phone'
 import {
-  type Call, type Disposition, type Lead,
+  type Call, type Disposition, type Lead, type LeadContact,
   DISPOSITION_LABEL, DISPOSITION_ORDER,
 } from '../types'
 
@@ -74,6 +75,38 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
       .then(setHistory)
       .catch(() => { /* sin historial */ })
   }, [lead.place_id])
+
+  // ── Responsables ───────────────────────────────────────────────────────────
+  const [contacts, setContacts] = useState<LeadContact[]>([])
+  const [enriching, setEnriching] = useState(false)
+  const [enrichMsg, setEnrichMsg] = useState<string | null>(null)
+
+  useEffect(() => {
+    apiJson<LeadContact[]>(`/api/leads/${encodeURIComponent(lead.place_id)}/contacts`)
+      .then(setContacts)
+      .catch(() => { /* sin contactos */ })
+  }, [lead.place_id])
+
+  const findContacts = async () => {
+    setEnriching(true)
+    setEnrichMsg(null)
+    try {
+      const found = await apiJson<LeadContact[]>(
+        `/api/leads/${encodeURIComponent(lead.place_id)}/enrich`, { method: 'POST' },
+      )
+      setContacts(found)
+      if (found.length === 0) setEnrichMsg('La web no nombra a ningún responsable.')
+    } catch {
+      setEnrichMsg('No se pudo revisar la web.')
+    } finally {
+      setEnriching(false)
+    }
+  }
+
+  const fillContact = (c: LeadContact) => {
+    if (c.full_name) setContactName(c.full_name)
+    if (c.email) setContactEmail(c.email)
+  }
 
   const stopTracks = useCallback(() => {
     streamRef.current?.getTracks().forEach(t => t.stop())
@@ -290,11 +323,83 @@ export default function CallPanel({ lead, onClose, onSaved }: Props) {
                   <Mail size={12} />{lead.email}
                 </span>
               )}
+              {lead.socials?.linkedin && (
+                <a href={lead.socials.linkedin} target="_blank" rel="noopener noreferrer"
+                   className="flex items-center gap-1 text-scala-blue-light hover:underline">
+                  <Linkedin size={12} /> LinkedIn
+                </a>
+              )}
+              {lead.socials?.instagram && (
+                <a href={lead.socials.instagram} target="_blank" rel="noopener noreferrer"
+                   className="flex items-center gap-1 text-scala-blue-light hover:underline">
+                  <Instagram size={12} /> Instagram
+                </a>
+              )}
             </div>
             {lead.category && (
               <p className="text-xs text-scala-text-subtle">{lead.category.replace(/_/g, ' ')}</p>
             )}
           </div>
+
+          {/* Responsables: por quién preguntar */}
+          {(contacts.length > 0 || lead.website) && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs uppercase tracking-widest text-scala-text-muted">
+                  Por quién preguntar
+                </label>
+                {lead.website && (
+                  <button onClick={findContacts} disabled={enriching}
+                          className="flex items-center gap-1.5 text-xs text-scala-text-muted hover:text-scala-text-primary disabled:opacity-50">
+                    {enriching
+                      ? <><Loader2 size={12} className="animate-spin" /> Revisando la web...</>
+                      : <><UserSearch size={12} /> {contacts.length ? 'Volver a buscar' : 'Buscar responsables'}</>}
+                  </button>
+                )}
+              </div>
+              {contacts.length > 0 && (
+                <div className="space-y-2">
+                  {contacts.map(c => (
+                    <div key={c.id}
+                         className={`rounded-lg border p-3 text-xs ${
+                           c.is_decision_maker
+                             ? 'border-scala-green/30 bg-scala-green/[0.06]'
+                             : 'border-white/[0.07] bg-scala-surface2'
+                         }`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-scala-text-primary truncate">
+                            {c.full_name ?? c.email}
+                            {c.role && <span className="font-normal text-scala-text-muted"> · {c.role}</span>}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-3 mt-1 text-scala-text-muted">
+                            {c.full_name && c.email && (
+                              <span className="flex items-center gap-1"><Mail size={11} />{c.email}</span>
+                            )}
+                            {c.linkedin_url && (
+                              <a href={c.linkedin_url} target="_blank" rel="noopener noreferrer"
+                                 className="flex items-center gap-1 text-scala-blue-light hover:underline">
+                                <Linkedin size={11} /> Perfil
+                              </a>
+                            )}
+                            {c.is_decision_maker && <span className="text-scala-green">decisor</span>}
+                            {c.confidence === 'baja' && (
+                              <span className="text-scala-text-subtle">sin confirmar</span>
+                            )}
+                          </div>
+                        </div>
+                        <button onClick={() => fillContact(c)}
+                                className="shrink-0 px-2 py-0.5 rounded-full text-[10px] border border-white/10 text-scala-text-muted hover:text-scala-text-primary hover:border-white/25">
+                          Usar en la cita
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {enrichMsg && <p className="text-xs text-scala-text-subtle">{enrichMsg}</p>}
+            </div>
+          )}
 
           {/* Grabación */}
           <div>

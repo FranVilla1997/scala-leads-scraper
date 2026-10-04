@@ -16,11 +16,12 @@ from config import FRONTEND_URL, SCRAPER_CONCURRENCY
 from db import (
     create_call, create_seller, get_all_leads, get_all_zone_assignments,
     download_recording, get_call, get_call_metrics, get_call_queue, get_existing_emails,
-    list_calls_pending_transcript,
-    get_seller_zones, list_calls, list_distinct_zones, list_sellers,
+    get_lead, list_calls_pending_transcript, list_contacts, list_leads_pending_enrichment,
+    get_seller_zones, list_calls, list_distinct_zones, list_sellers, save_enrichment,
     set_do_not_call, set_seller_active, set_seller_zones, sign_recording, update_call,
     update_lead_status, upload_recording, upsert_lead,
 )
+from enrich import find_contacts
 from places import search_places
 from scraper import EmailScraper
 from transcribe import TranscriptionUnavailable, process_recording
@@ -210,22 +211,32 @@ async def run_search(job_id: str, queries: list[str], zones: list[str], max_resu
             }
 
             cached_email = existing.get(place_id)
+            site = None
+            contacts: list[dict] = []
 
             if cached_email is not None:
                 lead["email"] = cached_email
                 skip_count += 1
             elif lead["website"]:
                 new_count += 1
-                lead["email"] = await scraper.extract(lead["website"])
+                site = await scraper.extract_site(lead["website"])
+                lead["email"] = site.email
+                contacts = await find_contacts(lead["name"], site)
             else:
                 new_count += 1
 
             await loop.run_in_executor(None, upsert_lead, lead)
+            if site is not None:
+                await loop.run_in_executor(None, save_enrichment, place_id, contacts, site.socials)
+
+            decisor = next((c["full_name"] for c in contacts if c["is_decision_maker"] and c["full_name"]), None)
 
             progress["done"] += 1
             await q.put({
                 "type": "scraping",
-                "message": f"({progress['done']}/{total}) {lead['name']}{' — ' + lead['email'] if lead['email'] else ''}",
+                "message": f"({progress['done']}/{total}) {lead['name']}"
+                           f"{' — ' + lead['email'] if lead['email'] else ''}"
+                           f"{' · decisor: ' + decisor if decisor else ''}",
                 "index": progress["done"],
                 "total": total,
             })
@@ -359,8 +370,6 @@ async def export_leads(user: CurrentUser = Depends(require_user)):
     )
 
 
-# ── Llamadas ─────────────────────────────────────────────────────────────────
-
 def _assert_lead_visible(place_id: str, user: CurrentUser) -> None:
     """Un vendedor solo puede operar sobre leads de sus zonas."""
     if user.is_admin:
@@ -368,6 +377,69 @@ def _assert_lead_visible(place_id: str, user: CurrentUser) -> None:
     leads = get_all_leads(zones=user.zones)
     if not any(l["place_id"] == place_id for l in leads):
         raise HTTPException(status_code=403, detail="Lead fuera de tus zonas asignadas")
+
+
+# ── Responsables / tomadores de decisión ─────────────────────────────────────
+
+async def _enrich_lead(scraper: EmailScraper, lead: dict) -> list[dict]:
+    """Busca responsables en la web del lead y los guarda."""
+    site = await scraper.extract_site(lead["website"])
+    contacts = await find_contacts(lead.get("name") or "", site)
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        None, save_enrichment, lead["place_id"], contacts, site.socials,
+        None if lead.get("email") else site.email,
+    )
+    return contacts
+
+
+@app.get("/api/leads/{place_id}/contacts")
+async def get_contacts(place_id: str, user: CurrentUser = Depends(require_user)):
+    _assert_lead_visible(place_id, user)
+    return list_contacts(place_id)
+
+
+@app.post("/api/leads/{place_id}/enrich")
+async def post_enrich(place_id: str, user: CurrentUser = Depends(require_user)):
+    """Busca (o vuelve a buscar) los responsables de un lead en su sitio web."""
+    _assert_lead_visible(place_id, user)
+    lead = get_lead(place_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead no encontrado")
+    if not lead.get("website"):
+        raise HTTPException(status_code=400, detail="El lead no tiene sitio web")
+
+    scraper = EmailScraper(concurrency=1)
+    try:
+        await _enrich_lead(scraper, lead)
+    finally:
+        await scraper.close()
+    return list_contacts(place_id)
+
+
+@app.post("/api/admin/enrich-pending")
+async def post_enrich_pending(limit: int = 50, _: CurrentUser = Depends(require_admin)):
+    """Busca responsables en los leads con web que todavía no fueron procesados."""
+    pending = list_leads_pending_enrichment(limit=max(1, min(limit, 200)))
+    scraper = EmailScraper(concurrency=SCRAPER_CONCURRENCY)
+    try:
+        results = await asyncio.gather(
+            *(_enrich_lead(scraper, l) for l in pending), return_exceptions=True
+        )
+    finally:
+        await scraper.close()
+
+    ok = [r for r in results if isinstance(r, list)]
+    return {
+        "procesados": len(ok),
+        "fallidos": len(results) - len(ok),
+        "con_contactos": sum(1 for r in ok if r),
+        "con_nombre": sum(1 for r in ok if any(c["full_name"] for c in r)),
+        "con_decisor": sum(1 for r in ok if any(c["is_decision_maker"] for c in r)),
+    }
+
+
+# ── Llamadas ─────────────────────────────────────────────────────────────────
 
 
 @app.post("/api/calls")

@@ -39,6 +39,24 @@ export interface Lead {
   last_called_at?: string | null
   call_count?: number
   next_action_at?: string | null
+  socials?: Partial<Record<'linkedin' | 'instagram' | 'facebook' | 'whatsapp', string>> | null
+  enriched_at?: string | null
+}
+
+/* ── Responsables ─────────────────────────────────────────────────────────── */
+
+export interface LeadContact {
+  id: string
+  place_id: string
+  full_name: string | null
+  role: string | null
+  email: string | null
+  phone: string | null
+  linkedin_url: string | null
+  is_decision_maker: boolean
+  source: string
+  source_url: string | null
+  confidence: 'alta' | 'media' | 'baja'
 }
 
 /* ── Llamadas ─────────────────────────────────────────────────────────────── */
