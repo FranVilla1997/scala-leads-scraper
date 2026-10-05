@@ -70,7 +70,7 @@ export default function LeadsTable({ leads }: Props) {
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-scala-blue hover:bg-scala-blue-light text-white text-xs font-medium transition-colors disabled:opacity-40"
           >
             <Download size={13} />
-            Exportar CSV
+            Exportar esta búsqueda ({leads.length})
           </button>
         </div>
       </div>

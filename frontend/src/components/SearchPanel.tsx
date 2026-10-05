@@ -1,19 +1,95 @@
 import { useState, useRef, type FormEvent, type KeyboardEvent } from 'react'
-import { Search, MapPin, Briefcase, Loader2, Layers, X, Plus } from 'lucide-react'
+import { Search, MapPin, Briefcase, Loader2, Layers, X, Plus, ChevronDown, ListChecks } from 'lucide-react'
+import { BUSINESS_GROUPS, ZONE_GROUPS, type CatalogGroup } from '../lib/catalog'
 
 interface Props {
-  onSearch: (queries: string[], zones: string[], maxResults: number) => void
+  onSearch: (queries: string[], zones: string[], maxResults: number, findContacts: boolean) => void
   isSearching: boolean
 }
 
+// `requests`: consultas a Google Places por cada combinación rubro × zona
 const COVERAGE_OPTIONS = [
-  { value: 60,  label: '60',  desc: 'Rápido' },
-  { value: 120, label: '120', desc: 'Grilla 2×2' },
-  { value: 200, label: '200', desc: 'Grilla 3×3' },
-  { value: 300, label: '300', desc: 'Grilla 4×4' },
+  { value: 60,  label: '60',  desc: 'Rápido',     requests: 3 },
+  { value: 120, label: '120', desc: 'Grilla 2×2', requests: 12 },
+  { value: 200, label: '200', desc: 'Grilla 3×3', requests: 27 },
+  { value: 300, label: '300', desc: 'Grilla 4×4', requests: 48 },
 ]
 
-const SUGGESTED_CITIES = ['Palermo', 'Belgrano', 'Recoleta', 'San Telmo', 'Caballito', 'Flores']
+// Precio de lista aproximado de Places Text Search con teléfono y web (USD por consulta)
+const USD_PER_PLACES_REQUEST = 0.035
+
+/** Lista agrupada para tildar rubros o zonas de a muchos. */
+function CatalogPicker({
+  label, groups, selected, onAdd, onRemove, disabled,
+}: {
+  label: string
+  groups: CatalogGroup[]
+  selected: string[]
+  onAdd: (values: string[]) => void
+  onRemove: (values: string[]) => void
+  disabled: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const picked = groups.reduce((n, g) => n + g.items.filter(i => selected.includes(i)).length, 0)
+
+  return (
+    <div className="rounded-lg border border-white/[0.07] bg-scala-surface2/50">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-scala-text-muted hover:text-scala-text-primary transition-colors"
+      >
+        <ListChecks size={13} />
+        <span>{label}</span>
+        {picked > 0 && <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-scala-blue text-white">{picked}</span>}
+        <ChevronDown size={12} className={`ml-auto transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 space-y-3 max-h-80 overflow-y-auto">
+          {groups.map(g => {
+            const allPicked = g.items.every(i => selected.includes(i))
+            return (
+              <div key={g.name}>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-[11px] uppercase tracking-wider text-scala-text-subtle">{g.name}</span>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => allPicked ? onRemove(g.items) : onAdd(g.items)}
+                    className="text-[11px] text-scala-blue-light hover:underline disabled:opacity-40"
+                  >
+                    {allPicked ? 'Quitar todos' : `Elegir los ${g.items.length}`}
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {g.items.map(item => {
+                    const on = selected.includes(item)
+                    return (
+                      <button
+                        key={item}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => on ? onRemove([item]) : onAdd([item])}
+                        className={`px-2.5 py-1 rounded-full text-xs border transition-colors disabled:opacity-40 ${
+                          on
+                            ? 'bg-scala-blue/20 border-scala-blue/50 text-scala-text-primary'
+                            : 'bg-scala-surface2 border-white/[0.07] text-scala-text-muted hover:text-scala-text-primary hover:border-white/20'
+                        }`}
+                      >
+                        {item}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function SearchPanel({ onSearch, isSearching }: Props) {
   const [queries, setQueries] = useState<string[]>([])
@@ -21,6 +97,7 @@ export default function SearchPanel({ onSearch, isSearching }: Props) {
   const [zones, setZones] = useState<string[]>([])
   const [zoneInput, setZoneInput] = useState('')
   const [maxResults, setMaxResults] = useState(60)
+  const [findContacts, setFindContacts] = useState(false)
   const queryRef = useRef<HTMLInputElement>(null)
   const zoneRef = useRef<HTMLInputElement>(null)
 
@@ -35,9 +112,14 @@ export default function SearchPanel({ onSearch, isSearching }: Props) {
 
   const addZone = (value: string) => {
     const v = value.trim()
-    if (v && !zones.includes(v)) setZones(prev => [...prev, v])
+    if (v && !zones.some(z => z.toLowerCase() === v.toLowerCase())) setZones(prev => [...prev, v])
     setZoneInput('')
   }
+
+  const addMany = (setter: React.Dispatch<React.SetStateAction<string[]>>) => (values: string[]) =>
+    setter(prev => [...prev, ...values.filter(v => !prev.includes(v))])
+  const removeMany = (setter: React.Dispatch<React.SetStateAction<string[]>>) => (values: string[]) =>
+    setter(prev => prev.filter(v => !values.includes(v)))
   const removeZone = (z: string) => setZones(prev => prev.filter(x => x !== z))
 
   const handleChipKey = (
@@ -63,9 +145,16 @@ export default function SearchPanel({ onSearch, isSearching }: Props) {
     const allQueries = qPending && !queries.some(q => q.toLowerCase() === qPending.toLowerCase()) ? [...queries, qPending] : queries
     const allZones = zPending && !zones.includes(zPending) ? [...zones, zPending] : zones
     if (allQueries.length && allZones.length && !isSearching) {
+      const combos = allQueries.length * allZones.length
+      if (combos > 30 && !window.confirm(
+        `Vas a lanzar ${combos} búsquedas (${allQueries.length} rubros × ${allZones.length} zonas): ` +
+        `unas ${(combos * requestsPerCombo).toLocaleString()} consultas a Google Places, ` +
+        `aprox. USD ${Math.round(combos * requestsPerCombo * USD_PER_PLACES_REQUEST)}. ` +
+        `Puede tardar un buen rato. ¿Seguir?`
+      )) return
       setQueries(allQueries); setZones(allZones)
       setQueryInput(''); setZoneInput('')
-      onSearch(allQueries, allZones, maxResults)
+      onSearch(allQueries, allZones, maxResults, findContacts)
     }
   }
 
@@ -73,6 +162,8 @@ export default function SearchPanel({ onSearch, isSearching }: Props) {
   const totalZones   = zones.length   + (zoneInput.trim() ? 1 : 0)
   const canSearch    = totalQueries > 0 && totalZones > 0 && !isSearching
   const estimatedMax = totalQueries * totalZones * maxResults
+  const requestsPerCombo = COVERAGE_OPTIONS.find(o => o.value === maxResults)?.requests ?? 3
+  const estimatedRequests = totalQueries * totalZones * requestsPerCombo
 
   return (
     <div className="rounded-xl border border-white/[0.07] bg-scala-surface1 p-6 mb-6">
@@ -130,6 +221,15 @@ export default function SearchPanel({ onSearch, isSearching }: Props) {
           </button>
         </div>
 
+        <CatalogPicker
+          label="Elegir rubros de la lista"
+          groups={BUSINESS_GROUPS}
+          selected={queries}
+          onAdd={addMany(setQueries)}
+          onRemove={removeMany(setQueries)}
+          disabled={isSearching}
+        />
+
         {/* Row 2: zone tag input */}
         <div
           className="flex flex-wrap items-center gap-1.5 min-h-[42px] px-3 py-2 rounded-lg bg-scala-surface2 border border-white/[0.07] focus-within:border-scala-blue/50 focus-within:ring-1 focus-within:ring-scala-blue/30 cursor-text transition-colors"
@@ -168,28 +268,35 @@ export default function SearchPanel({ onSearch, isSearching }: Props) {
           )}
         </div>
 
+        <CatalogPicker
+          label="Elegir zonas de la lista"
+          groups={ZONE_GROUPS}
+          selected={zones}
+          onAdd={addMany(setZones)}
+          onRemove={removeMany(setZones)}
+          disabled={isSearching}
+        />
+
         {(totalQueries > 1 || totalZones > 1) && (
           <p className="text-xs text-scala-text-muted pl-1">
-            Se van a correr <span className="text-scala-text-primary font-medium">{totalQueries} keyword(s)</span> × <span className="text-scala-text-primary font-medium">{totalZones} zona(s)</span> = <span className="text-scala-text-primary font-medium">{totalQueries * totalZones} búsquedas</span> — hasta <span className="text-scala-text-primary font-medium">{estimatedMax.toLocaleString()}</span> resultados totales antes de deduplicar
+            Se van a correr <span className="text-scala-text-primary font-medium">{totalQueries} rubro(s)</span> × <span className="text-scala-text-primary font-medium">{totalZones} zona(s)</span> = <span className="text-scala-text-primary font-medium">{totalQueries * totalZones} búsquedas</span> — hasta <span className="text-scala-text-primary font-medium">{estimatedMax.toLocaleString()}</span> resultados antes de deduplicar · <span className="text-scala-text-primary font-medium">{estimatedRequests.toLocaleString()}</span> consultas a Google (aprox. USD {Math.round(estimatedRequests * USD_PER_PLACES_REQUEST)})
           </p>
         )}
       </form>
 
       {/* Bottom row: suggestions + coverage */}
       <div className="flex flex-wrap items-center justify-between gap-3 mt-4">
-        <div className="flex flex-wrap gap-2">
-          {SUGGESTED_CITIES.map(s => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => addZone(s)}
-              disabled={isSearching || zones.includes(s)}
-              className="px-3 py-1 rounded-full text-xs border border-white/[0.07] bg-scala-surface2 text-scala-text-muted hover:text-scala-text-primary hover:border-white/20 disabled:opacity-30 transition-colors"
-            >
-              + {s}
-            </button>
-          ))}
-        </div>
+        <label className="flex items-center gap-2 text-xs text-scala-text-muted cursor-pointer"
+               title="Más lento y usa una búsqueda paga por lead. Si lo dejás apagado, lo podés hacer después desde Base de datos sobre los leads que elijas.">
+          <input
+            type="checkbox"
+            checked={findContacts}
+            onChange={e => setFindContacts(e.target.checked)}
+            disabled={isSearching}
+            className="accent-scala-blue"
+          />
+          Buscar responsables durante el scrape (web + LinkedIn)
+        </label>
 
         <div className="flex items-center gap-2 shrink-0">
           <Layers size={13} className="text-scala-text-subtle" />

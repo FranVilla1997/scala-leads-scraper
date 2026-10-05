@@ -74,6 +74,8 @@ class SearchRequest(BaseModel):
     queries: list[str] | None = None
     zones: list[str]
     max_results: int = 60
+    # Buscar responsables (web + LinkedIn) mientras se scrapea: más lento y con costo por lead
+    find_contacts: bool = False
 
     def normalized_queries(self) -> list[str]:
         out: list[str] = []
@@ -146,7 +148,8 @@ class DoNotCallPayload(BaseModel):
 
 # ── Search job ───────────────────────────────────────────────────────────────
 
-async def run_search(job_id: str, queries: list[str], zones: list[str], max_results: int = 60) -> None:
+async def run_search(job_id: str, queries: list[str], zones: list[str], max_results: int = 60,
+                     with_contacts: bool = False) -> None:
     state = jobs[job_id]
     q = state.queue
     loop = asyncio.get_event_loop()
@@ -231,12 +234,14 @@ async def run_search(job_id: str, queries: list[str], zones: list[str], max_resu
                 new_count += 1
                 site = await scraper.extract_site(lead["website"])
                 lead["email"] = site.email
-                contacts = await find_contacts(lead["name"], site)
+                if with_contacts:
+                    contacts = await find_contacts(lead["name"], site)
             else:
                 new_count += 1
 
             await loop.run_in_executor(None, upsert_lead, lead)
-            if site is not None:
+            # Sin with_contacts el lead queda como "sin buscar" para hacerlo después desde la base
+            if site is not None and with_contacts:
                 await loop.run_in_executor(None, save_enrichment, place_id, contacts, site.socials)
 
             decisor = next((c["full_name"] for c in contacts if c["is_decision_maker"] and c["full_name"]), None)
@@ -282,7 +287,9 @@ async def start_search(req: SearchRequest, _: CurrentUser = Depends(require_admi
     job_id = str(uuid.uuid4())
     state = JobState()
     jobs[job_id] = state
-    state.task = asyncio.create_task(run_search(job_id, queries, req.zones, req.max_results))
+    state.task = asyncio.create_task(
+        run_search(job_id, queries, req.zones, req.max_results, req.find_contacts)
+    )
     return {"job_id": job_id}
 
 

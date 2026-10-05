@@ -25,7 +25,7 @@ function AdminApp() {
   const [progress, setProgress] = useState({ current: 0, total: 0 })
   const esRef = useRef<EventSource | null>(null)
 
-  const handleSearch = async (queries: string[], zones: string[], maxResults: number) => {
+  const handleSearch = async (queries: string[], zones: string[], maxResults: number, findContacts: boolean) => {
     esRef.current?.close()
     setSearchState('searching')
     setLeads([])
@@ -35,7 +35,7 @@ function AdminApp() {
     try {
       const res = await apiFetch('/api/search', {
         method: 'POST',
-        body: JSON.stringify({ queries, zones, max_results: maxResults }),
+        body: JSON.stringify({ queries, zones, max_results: maxResults, find_contacts: findContacts }),
       })
       if (!res.ok) throw new Error('Error al iniciar la búsqueda')
       const { job_id } = await res.json() as { job_id: string }
